@@ -1,0 +1,93 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
+
+	"smm-tg-bot/internal/app"
+	"smm-tg-bot/internal/config"
+	"smm-tg-bot/internal/httpapi"
+	"smm-tg-bot/internal/payments"
+	"smm-tg-bot/internal/smm"
+	"smm-tg-bot/internal/storage"
+	"smm-tg-bot/internal/telegram"
+)
+
+func main() {
+	_ = godotenv.Load()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	cfg, err := config.Load()
+	if err != nil {
+		logger.Error("config", "error", err)
+		os.Exit(1)
+	}
+
+	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("postgres", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+	if err := storage.Migrate(ctx, db); err != nil {
+		logger.Error("migrate", "error", err)
+		os.Exit(1)
+	}
+
+	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr, Password: cfg.RedisPassword, DB: cfg.RedisDB})
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		logger.Error("redis", "error", err)
+		os.Exit(1)
+	}
+	defer rdb.Close()
+
+	bot, err := tgbotapi.NewBotAPI(cfg.TelegramToken)
+	if err != nil {
+		logger.Error("telegram", "error", err)
+		os.Exit(1)
+	}
+
+	store := storage.New(db)
+	smmClient := smm.NewClient(cfg.SocRocketAPIURL, cfg.SocRocketAPIKey)
+	paymentHub := payments.NewHub(cfg)
+	service := app.NewService(cfg, store, rdb, smmClient, paymentHub, bot, logger)
+	tg := telegram.New(service, bot, logger)
+
+	router := chi.NewRouter()
+	httpapi.Mount(router, service, paymentHub, logger)
+	server := &http.Server{
+		Addr:              cfg.HTTPAddr,
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	go func() {
+		logger.Info("http listening", "addr", cfg.HTTPAddr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("http", "error", err)
+			stop()
+		}
+	}()
+	go service.RunOrderSync(ctx)
+	go service.RunBackups(ctx)
+	go tg.Run(ctx)
+
+	<-ctx.Done()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = server.Shutdown(shutdownCtx)
+	logger.Info("stopped")
+}
