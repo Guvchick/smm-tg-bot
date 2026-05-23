@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	AppEnv          string
+	LogLevel        string
 	HTTPAddr       string
 	PublicBaseURL  string
 	TelegramToken  string
@@ -23,12 +24,20 @@ type Config struct {
 	SocRocketAPIURL string
 	SocRocketAPIKey string
 	DefaultMarkup   float64
+	PlategaEnabled  bool
 	PlategaMerchant string
 	PlategaSecret   string
+	PlategaAPIURL   string
+	PallyEnabled    bool
 	PallyToken      string
 	PallyShopID     string
+	PallyWebhookSecret string
+	PallyAPIURL     string
+	HeleketEnabled  bool
 	HeleketPayKey   string
 	HeleketMerchant string
+	HeleketAPIURL   string
+	CryptoBotEnabled bool
 	CryptoBotToken  string
 	CryptoBotBase   string
 	ReferralPercent float64
@@ -39,6 +48,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		AppEnv:          env("APP_ENV", "dev"),
+		LogLevel:        env("LOG_LEVEL", "info"),
 		HTTPAddr:       env("HTTP_ADDR", ":8080"),
 		PublicBaseURL:  strings.TrimRight(env("PUBLIC_BASE_URL", "http://localhost:8080"), "/"),
 		TelegramToken:  os.Getenv("TELEGRAM_BOT_TOKEN"),
@@ -52,12 +62,20 @@ func Load() (Config, error) {
 		SocRocketAPIURL: env("SOC_ROCKET_API_URL", "https://soc-rocket.ru/api.php"),
 		SocRocketAPIKey: os.Getenv("SOC_ROCKET_API_KEY"),
 		DefaultMarkup:   parseFloat(env("DEFAULT_MARKUP_PERCENT", "25")),
+		PlategaEnabled:  parseBool(env("PLATEGA_ENABLED", "true")),
 		PlategaMerchant: os.Getenv("PLATEGA_MERCHANT_ID"),
 		PlategaSecret:   os.Getenv("PLATEGA_SECRET"),
+		PlategaAPIURL:   env("PLATEGA_API_URL", "https://app.platega.io/api/v1/transaction/process"),
+		PallyEnabled:    parseBool(env("PALLY_ENABLED", "true")),
 		PallyToken:      os.Getenv("PALLY_TOKEN"),
 		PallyShopID:     os.Getenv("PALLY_SHOP_ID"),
+		PallyWebhookSecret: env("PALLY_WEBHOOK_SECRET", os.Getenv("PALLY_TOKEN")),
+		PallyAPIURL:     env("PALLY_API_URL", "https://pal24.pro/api/v1/bill/create"),
+		HeleketEnabled:  parseBool(env("HELEKET_ENABLED", "true")),
 		HeleketPayKey:   os.Getenv("HELEKET_PAYMENT_KEY"),
 		HeleketMerchant: os.Getenv("HELEKET_MERCHANT_ID"),
+		HeleketAPIURL:   env("HELEKET_API_URL", "https://api.heleket.com/v1/payment"),
+		CryptoBotEnabled: parseBool(env("CRYPTOBOT_ENABLED", "true")),
 		CryptoBotToken:  os.Getenv("CRYPTOBOT_TOKEN"),
 		CryptoBotBase:   strings.TrimRight(env("CRYPTOBOT_BASE_URL", "https://pay.crypt.bot"), "/"),
 		ReferralPercent: parseFloat(env("REFERRAL_PERCENT", "5")),
@@ -74,6 +92,21 @@ func Load() (Config, error) {
 		return cfg, errors.New("SOC_ROCKET_API_KEY is required")
 	}
 	return cfg, nil
+}
+
+func (c Config) PaymentEnabled(provider string) bool {
+	switch provider {
+	case "platega":
+		return c.PlategaEnabled
+	case "pally":
+		return c.PallyEnabled
+	case "heleket":
+		return c.HeleketEnabled
+	case "cryptobot":
+		return c.CryptoBotEnabled
+	default:
+		return false
+	}
 }
 
 func env(key, fallback string) string {
@@ -105,6 +138,15 @@ func parseInt64(raw string) int64 {
 func parseFloat(raw string) float64 {
 	v, _ := strconv.ParseFloat(strings.TrimSpace(raw), 64)
 	return v
+}
+
+func parseBool(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "y", "on", "enabled":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseDuration(raw string) time.Duration {

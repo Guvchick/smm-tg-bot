@@ -251,6 +251,10 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		b.reply(msg.Chat.ID, "<b>"+esc(title)+"</b>\n\n"+esc(body), nil)
 	case strings.HasPrefix(data, "pay:"):
 		provider := strings.TrimPrefix(data, "pay:")
+		if !b.service.Cfg.PaymentEnabled(provider) {
+			b.reply(msg.Chat.ID, "Эта платежная система сейчас отключена.", nil)
+			return
+		}
 		b.reply(msg.Chat.ID, "Введите сумму пополнения в RUB, например 500", nil)
 		_ = b.service.SaveDraft(ctx, cb.From.ID, app.OrderDraft{Mode: "topup", Step: provider})
 	case data == "admin:stats":
@@ -413,10 +417,32 @@ func (b *Bot) startMassOrder(ctx context.Context, chatID, tgID int64) {
 }
 
 func (b *Bot) showTopup(chatID int64) {
-	kb := tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("💳 Platega", "pay:platega"), tgbotapi.NewInlineKeyboardButtonData("💎 Pally", "pay:pally")),
-		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🪙 Heleket", "pay:heleket"), tgbotapi.NewInlineKeyboardButtonData("🤖 CryptoBot", "pay:cryptobot")),
-	)
+	var buttons []tgbotapi.InlineKeyboardButton
+	if b.service.Cfg.PaymentEnabled("platega") {
+		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("💳 Platega", "pay:platega"))
+	}
+	if b.service.Cfg.PaymentEnabled("pally") {
+		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("💎 Pally", "pay:pally"))
+	}
+	if b.service.Cfg.PaymentEnabled("heleket") {
+		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("🪙 Heleket", "pay:heleket"))
+	}
+	if b.service.Cfg.PaymentEnabled("cryptobot") {
+		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("🤖 CryptoBot", "pay:cryptobot"))
+	}
+	if len(buttons) == 0 {
+		b.reply(chatID, "Пополнение временно отключено.", nil)
+		return
+	}
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for i := 0; i < len(buttons); i += 2 {
+		end := i + 2
+		if end > len(buttons) {
+			end = len(buttons)
+		}
+		rows = append(rows, buttons[i:end])
+	}
+	kb := tgbotapi.NewInlineKeyboardMarkup(rows...)
 	b.reply(chatID, "Выберите платежную систему:", kb)
 }
 

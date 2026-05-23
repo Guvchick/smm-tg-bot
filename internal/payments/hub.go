@@ -52,6 +52,9 @@ func NewHub(cfg config.Config) *Hub {
 }
 
 func (h *Hub) CreateInvoice(ctx context.Context, provider string, req InvoiceRequest) (Invoice, error) {
+	if !h.cfg.PaymentEnabled(provider) {
+		return Invoice{}, fmt.Errorf("payment provider disabled")
+	}
 	switch provider {
 	case "cryptobot":
 		return h.createCryptoBot(ctx, req)
@@ -116,7 +119,7 @@ func (h *Hub) createPally(ctx context.Context, req InvoiceRequest) (Invoice, err
 		"payer_pays_commission": {"1"},
 		"name":                  {"SMM balance"},
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://pal24.pro/api/v1/bill/create", strings.NewReader(values.Encode()))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, h.cfg.PallyAPIURL, strings.NewReader(values.Encode()))
 	if err != nil {
 		return Invoice{}, err
 	}
@@ -142,7 +145,7 @@ func (h *Hub) createPlatega(ctx context.Context, req InvoiceRequest) (Invoice, e
 		"orderId":     req.ID,
 	}
 	payload, _ := json.Marshal(body)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://app.platega.io/api/v1/transaction/process", bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, h.cfg.PlategaAPIURL, bytes.NewReader(payload))
 	if err != nil {
 		return Invoice{}, err
 	}
@@ -164,7 +167,7 @@ func (h *Hub) createHeleket(ctx context.Context, req InvoiceRequest) (Invoice, e
 		"url_callback": req.CallbackURL,
 	}
 	payload, _ := json.Marshal(body)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.heleket.com/v1/payment", bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, h.cfg.HeleketAPIURL, bytes.NewReader(payload))
 	if err != nil {
 		return Invoice{}, err
 	}
@@ -183,6 +186,9 @@ func (h *Hub) createHeleket(ctx context.Context, req InvoiceRequest) (Invoice, e
 }
 
 func (h *Hub) ParseWebhook(provider string, r *http.Request, raw []byte) (WebhookEvent, error) {
+	if !h.cfg.PaymentEnabled(provider) {
+		return WebhookEvent{}, fmt.Errorf("payment provider disabled")
+	}
 	switch provider {
 	case "platega":
 		return h.parsePlatega(r, raw)
@@ -219,8 +225,8 @@ func (h *Hub) parsePally(r *http.Request, raw []byte) (WebhookEvent, error) {
 	}
 	outSum := r.Form.Get("OutSum")
 	invID := r.Form.Get("InvId")
-	expected := strings.ToUpper(md5Hex(outSum + ":" + invID + ":" + h.cfg.PallyToken))
-	if h.cfg.PallyToken != "" && !hmac.Equal([]byte(expected), []byte(strings.ToUpper(r.Form.Get("SignatureValue")))) {
+	expected := strings.ToUpper(md5Hex(outSum + ":" + invID + ":" + h.cfg.PallyWebhookSecret))
+	if h.cfg.PallyWebhookSecret != "" && !hmac.Equal([]byte(expected), []byte(strings.ToUpper(r.Form.Get("SignatureValue")))) {
 		return WebhookEvent{}, fmt.Errorf("bad pally signature")
 	}
 	return WebhookEvent{

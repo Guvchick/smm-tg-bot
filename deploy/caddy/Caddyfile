@@ -7,7 +7,7 @@
 	}
 }
 
-bot.example.com {
+{$CADDY_DOMAIN:localhost} {
 	encode zstd gzip
 
 	log {
@@ -16,5 +16,5 @@ bot.example.com {
 		level INFO
 	}
 
-	reverse_proxy 127.0.0.1:8080
+	reverse_proxy {$CADDY_UPSTREAM:host.docker.internal:8080}
 }

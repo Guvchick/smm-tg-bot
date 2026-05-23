@@ -1,0 +1,9 @@
+.git
+.env
+*.log
+tmp
+dist
+bin
+pg_data
+redis_data
+caddy_data
