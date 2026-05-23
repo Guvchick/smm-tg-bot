@@ -13,10 +13,11 @@ import (
 )
 
 type Store struct {
-	db *pgxpool.Pool
+	db  *pgxpool.Pool
+	orm *ORM
 }
 
-func New(db *pgxpool.Pool) *Store { return &Store{db: db} }
+func New(db *pgxpool.Pool, orm *ORM) *Store { return &Store{db: db, orm: orm} }
 
 func (s *Store) UpsertUser(ctx context.Context, tgID int64, username, firstName string, lang domain.Language, referredBy *int64) (domain.User, error) {
 	code := fmt.Sprintf("u%d", tgID)
@@ -187,6 +188,21 @@ func (s *Store) UserTransactions(ctx context.Context, userID int64, limit int) (
 }
 
 func (s *Store) LatestTransactions(ctx context.Context, limit int) ([]domain.Transaction, error) {
+	if s.orm != nil {
+		models, err := s.orm.LatestTransactions(limit)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]domain.Transaction, 0, len(models))
+		for _, tx := range models {
+			out = append(out, domain.Transaction{
+				ID: tx.ID, UserID: tx.UserID, Provider: tx.Provider, ProviderID: tx.ProviderID,
+				AmountCents: tx.AmountCents, Currency: tx.Currency, Status: tx.Status, PayURL: tx.PayURL,
+				CreatedAt: tx.CreatedAt,
+			})
+		}
+		return out, nil
+	}
 	rows, err := s.db.Query(ctx, `select id,user_id,provider,provider_id,amount_cents,currency,status,pay_url,created_at from transactions order by created_at desc limit $1`, limit)
 	if err != nil {
 		return nil, err
@@ -204,6 +220,21 @@ func (s *Store) LatestTransactions(ctx context.Context, limit int) ([]domain.Tra
 }
 
 func (s *Store) LatestUsers(ctx context.Context, limit int) ([]domain.User, error) {
+	if s.orm != nil {
+		models, err := s.orm.LatestUsers(limit)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]domain.User, 0, len(models))
+		for _, u := range models {
+			out = append(out, domain.User{
+				ID: u.ID, TelegramID: u.TelegramID, Username: u.Username, FirstName: u.FirstName,
+				Language: domain.Language(u.Language), BalanceCents: u.BalanceCents, BonusCents: u.BonusCents,
+				ReferralCode: u.ReferralCode, ReferredBy: u.ReferredBy, IsBlocked: u.IsBlocked, CreatedAt: u.CreatedAt,
+			})
+		}
+		return out, nil
+	}
 	rows, err := s.db.Query(ctx, `select id, telegram_id, username, first_name, language, balance_cents, bonus_cents, referral_code, referred_by, is_blocked, created_at from users order by created_at desc limit $1`, limit)
 	if err != nil {
 		return nil, err

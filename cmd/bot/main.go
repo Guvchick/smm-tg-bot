@@ -47,6 +47,11 @@ func main() {
 		logger.Error("migrate", "error", err)
 		os.Exit(1)
 	}
+	orm, err := storage.OpenORM(cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("orm", "error", err)
+		os.Exit(1)
+	}
 
 	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr, Password: cfg.RedisPassword, DB: cfg.RedisDB})
 	if err := rdb.Ping(ctx).Err(); err != nil {
@@ -61,7 +66,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	store := storage.New(db)
+	store := storage.New(db, orm)
 	smmClient := smm.NewClient(cfg.SocRocketAPIURL, cfg.SocRocketAPIKey)
 	paymentHub := payments.NewHub(cfg)
 	service := app.NewService(cfg, store, rdb, smmClient, paymentHub, bot, logger)

@@ -91,6 +91,9 @@ func Load() (Config, error) {
 	if cfg.SocRocketAPIKey == "" {
 		return cfg, errors.New("SOC_ROCKET_API_KEY is required")
 	}
+	if cfg.AppEnv == "prod" && !strings.HasPrefix(cfg.PublicBaseURL, "https://") {
+		return cfg, errors.New("PUBLIC_BASE_URL must start with https:// in prod")
+	}
 	return cfg, nil
 }
 
