@@ -44,6 +44,9 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 			start := time.Now()
 			rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rw, r)
+			if r.URL.Path == "/healthz" && rw.status < 500 {
+				return
+			}
 			logger.Info("http request", "method", r.Method, "path", r.URL.Path, "status", rw.status, "remote_addr", r.RemoteAddr, "duration_ms", time.Since(start).Milliseconds())
 		})
 	}

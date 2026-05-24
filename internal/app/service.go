@@ -179,8 +179,9 @@ func (s *Service) HandlePaymentEvent(ctx context.Context, event payments.Webhook
 		s.Log.Error("payment event update failed", "provider", event.Provider, "provider_id", event.ProviderID, "local_id", event.LocalID, "status", event.Status, "error", err)
 		return err
 	}
-	s.Log.Info("payment event handled", "provider", event.Provider, "provider_id", event.ProviderID, "local_id", event.LocalID, "status", event.Status, "previous_status", prev.Status, "amount_cents", tx.AmountCents, "duration_ms", time.Since(start).Milliseconds())
-	if event.Status == "paid" && prev.Status != "paid" {
+	credited := event.Status == "paid" && prev.Status != "paid"
+	s.Log.Info("payment event handled", "provider", event.Provider, "provider_id", event.ProviderID, "local_id", event.LocalID, "status", event.Status, "previous_status", prev.Status, "credited", credited, "amount_cents", tx.AmountCents, "duration_ms", time.Since(start).Milliseconds())
+	if credited {
 		if err := s.Store.AddBalance(ctx, tx.UserID, tx.AmountCents, false); err != nil {
 			return err
 		}
@@ -242,7 +243,7 @@ func (s *Service) CheckPayment(ctx context.Context, txID string, requesterTelegr
 		return tx, err
 	}
 	updated, err := s.Store.GetTransaction(ctx, txID)
-	s.Log.Info("manual payment check handled", "requester_telegram_id", requesterTelegramID, "provider", tx.Provider, "transaction_id", tx.ID, "provider_id", tx.ProviderID, "status", event.Status, "error", err)
+	s.Log.Info("manual payment check handled", "requester_telegram_id", requesterTelegramID, "provider", tx.Provider, "transaction_id", tx.ID, "provider_id", tx.ProviderID, "previous_status", tx.Status, "status", event.Status, "credited", tx.Status != "paid" && event.Status == "paid", "error", err)
 	return updated, err
 }
 

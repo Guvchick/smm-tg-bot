@@ -318,7 +318,7 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 			b.edit(msg.Chat.ID, msg.MessageID, "Не удалось проверить оплату: "+esc(err.Error()), &kb)
 			return
 		}
-		text := fmt.Sprintf("💳 Оплата %s\nСтатус: %s\nСумма: %s", tx.Provider, tx.Status, storage.FormatMoney(tx.AmountCents))
+		text := fmt.Sprintf("💳 Оплата %s\nСтатус: %s\nСумма: %s", tx.Provider, humanPaymentStatus(tx.Status), storage.FormatMoney(tx.AmountCents))
 		kb := backKeyboard()
 		b.edit(msg.Chat.ID, msg.MessageID, text, &kb)
 	case data == "admin:stats":
@@ -869,6 +869,19 @@ func short(s string, max int) string {
 		return string(r[:max])
 	}
 	return string(r[:max-1]) + "…"
+}
+
+func humanPaymentStatus(status string) string {
+	switch status {
+	case "paid":
+		return "✅ оплачено и зачислено"
+	case "waiting", "created", "pending":
+		return "⏳ ожидает оплаты"
+	case "failed":
+		return "❌ не оплачено"
+	default:
+		return status
+	}
 }
 
 func esc(s string) string {
