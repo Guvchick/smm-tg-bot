@@ -46,7 +46,7 @@ services:
       - .env
     environment:
       HTTP_ADDR: :8080
-      DATABASE_URL: ${BOT_DATABASE_URL:-postgres://postgres:postgres@postgres:5432/smm_bot?sslmode=disable}
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/smm_bot?sslmode=disable
       REDIS_ADDR: ${BOT_REDIS_ADDR:-redis:6379}
     depends_on:
       postgres:

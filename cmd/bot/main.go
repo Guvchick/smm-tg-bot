@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/url"
 	"net/http"
 	"os"
 	"os/signal"
@@ -36,6 +37,7 @@ func main() {
 		os.Exit(1)
 	}
 	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel(cfg.LogLevel)}))
+	logger.Info("postgres config", "database_url", safeDatabaseURL(cfg.DatabaseURL), "max_conns", cfg.PostgresMaxConns)
 
 	pgxCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
 	if err != nil {
@@ -113,6 +115,18 @@ func main() {
 	defer cancel()
 	_ = server.Shutdown(shutdownCtx)
 	logger.Info("stopped")
+}
+
+func safeDatabaseURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "invalid-url"
+	}
+	if u.User != nil {
+		username := u.User.Username()
+		u.User = url.UserPassword(username, "xxxxx")
+	}
+	return u.String()
 }
 
 func logLevel(raw string) slog.Level {
