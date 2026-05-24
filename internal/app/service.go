@@ -189,6 +189,10 @@ func (s *Service) HandlePaymentEvent(ctx context.Context, event payments.Webhook
 }
 
 func (s *Service) RunOrderSync(ctx context.Context) {
+	if s.Cfg.OrderSyncEvery < time.Minute {
+		s.Cfg.OrderSyncEvery = time.Minute
+	}
+	s.Log.Info("order sync started", "interval", s.Cfg.OrderSyncEvery.String())
 	ticker := time.NewTicker(s.Cfg.OrderSyncEvery)
 	defer ticker.Stop()
 	for {
@@ -228,6 +232,10 @@ func (s *Service) RunBackups(ctx context.Context) {
 	if s.Cfg.BackupGroupID == 0 {
 		return
 	}
+	if s.Cfg.BackupEvery < time.Hour {
+		s.Cfg.BackupEvery = time.Hour
+	}
+	s.Log.Info("backup job started", "interval", s.Cfg.BackupEvery.String())
 	ticker := time.NewTicker(s.Cfg.BackupEvery)
 	defer ticker.Stop()
 	for {

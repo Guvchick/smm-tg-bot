@@ -77,6 +77,22 @@ create unique index if not exists transactions_provider_id_unique
 on transactions(provider, provider_id)
 where provider_id <> '';
 
+create index if not exists orders_active_status_idx
+on orders(updated_at)
+where soc_order_id <> '' and status not in ('completed','canceled','partial');
+
+create index if not exists orders_user_id_id_idx
+on orders(user_id, id desc);
+
+create index if not exists transactions_user_created_idx
+on transactions(user_id, created_at desc);
+
+create index if not exists transactions_created_idx
+on transactions(created_at desc);
+
+create index if not exists users_created_idx
+on users(created_at desc);
+
 create table if not exists promos (
 	code text primary key,
 	bonus_percent numeric(8,2) not null default 0,

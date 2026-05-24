@@ -37,7 +37,16 @@ func main() {
 	}
 	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel(cfg.LogLevel)}))
 
-	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	pgxCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("postgres config", "error", err)
+		os.Exit(1)
+	}
+	pgxCfg.MaxConns = cfg.PostgresMaxConns
+	pgxCfg.MinConns = cfg.PostgresMinConns
+	pgxCfg.MaxConnLifetime = time.Hour
+	pgxCfg.MaxConnIdleTime = 10 * time.Minute
+	db, err := pgxpool.NewWithConfig(ctx, pgxCfg)
 	if err != nil {
 		logger.Error("postgres", "error", err)
 		os.Exit(1)
@@ -50,6 +59,10 @@ func main() {
 	orm, err := storage.OpenORM(cfg.DatabaseURL)
 	if err != nil {
 		logger.Error("orm", "error", err)
+		os.Exit(1)
+	}
+	if err := orm.SetPoolLimits(int(cfg.PostgresMaxConns), int(cfg.PostgresMinConns)); err != nil {
+		logger.Error("orm pool", "error", err)
 		os.Exit(1)
 	}
 
@@ -87,8 +100,12 @@ func main() {
 			stop()
 		}
 	}()
-	go service.RunOrderSync(ctx)
-	go service.RunBackups(ctx)
+	if cfg.OrderSyncEnabled {
+		go service.RunOrderSync(ctx)
+	}
+	if cfg.BackupEnabled {
+		go service.RunBackups(ctx)
+	}
 	go tg.Run(ctx)
 
 	<-ctx.Done()

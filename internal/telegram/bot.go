@@ -38,7 +38,11 @@ func (b *Bot) Run(ctx context.Context) {
 		case <-ctx.Done():
 			b.api.StopReceivingUpdates()
 			return
-		case update := <-updates:
+		case update, ok := <-updates:
+			if !ok {
+				b.log.Warn("telegram updates channel closed")
+				return
+			}
 			if update.CallbackQuery != nil {
 				b.handleCallback(ctx, update.CallbackQuery)
 			}

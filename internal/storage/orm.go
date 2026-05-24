@@ -86,6 +86,27 @@ func OpenORM(databaseURL string) (*ORM, error) {
 	return &ORM{db: db}, nil
 }
 
+func (o *ORM) SetPoolLimits(maxOpen, maxIdle int) error {
+	sqlDB, err := o.db.DB()
+	if err != nil {
+		return err
+	}
+	if maxOpen < 1 {
+		maxOpen = 1
+	}
+	if maxIdle < 0 {
+		maxIdle = 0
+	}
+	if maxIdle > maxOpen {
+		maxIdle = maxOpen
+	}
+	sqlDB.SetMaxOpenConns(maxOpen)
+	sqlDB.SetMaxIdleConns(maxIdle)
+	sqlDB.SetConnMaxIdleTime(10 * time.Minute)
+	sqlDB.SetConnMaxLifetime(time.Hour)
+	return nil
+}
+
 func (o *ORM) LatestUsers(limit int) ([]UserModel, error) {
 	var users []UserModel
 	err := o.db.Order("created_at desc").Limit(limit).Find(&users).Error

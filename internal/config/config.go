@@ -18,6 +18,8 @@ type Config struct {
 	AdminGroupID   int64
 	BackupGroupID  int64
 	DatabaseURL    string
+	PostgresMaxConns int32
+	PostgresMinConns int32
 	RedisAddr      string
 	RedisPassword  string
 	RedisDB        int
@@ -41,7 +43,9 @@ type Config struct {
 	CryptoBotToken  string
 	CryptoBotBase   string
 	ReferralPercent float64
+	OrderSyncEnabled bool
 	OrderSyncEvery  time.Duration
+	BackupEnabled   bool
 	BackupEvery     time.Duration
 }
 
@@ -56,6 +60,8 @@ func Load() (Config, error) {
 		AdminGroupID:   parseInt64(os.Getenv("ADMIN_GROUP_ID")),
 		BackupGroupID:  parseInt64(os.Getenv("BACKUP_GROUP_ID")),
 		DatabaseURL:    os.Getenv("DATABASE_URL"),
+		PostgresMaxConns: int32(parseInt64(env("POSTGRES_MAX_CONNS", "5"))),
+		PostgresMinConns: int32(parseInt64(env("POSTGRES_MIN_CONNS", "0"))),
 		RedisAddr:      env("REDIS_ADDR", "localhost:6379"),
 		RedisPassword:  os.Getenv("REDIS_PASSWORD"),
 		RedisDB:        int(parseInt64(env("REDIS_DB", "0"))),
@@ -79,7 +85,9 @@ func Load() (Config, error) {
 		CryptoBotToken:  os.Getenv("CRYPTOBOT_TOKEN"),
 		CryptoBotBase:   strings.TrimRight(env("CRYPTOBOT_BASE_URL", "https://pay.crypt.bot"), "/"),
 		ReferralPercent: parseFloat(env("REFERRAL_PERCENT", "5")),
-		OrderSyncEvery:  parseDuration(env("ORDER_SYNC_INTERVAL", "60s")),
+		OrderSyncEnabled: parseBool(env("ORDER_SYNC_ENABLED", "true")),
+		OrderSyncEvery:  parseDuration(env("ORDER_SYNC_INTERVAL", "5m")),
+		BackupEnabled:   parseBool(env("BACKUP_ENABLED", "true")),
 		BackupEvery:     parseDuration(env("BACKUP_INTERVAL", "24h")),
 	}
 	if cfg.TelegramToken == "" {
@@ -94,6 +102,17 @@ func Load() (Config, error) {
 	if cfg.AppEnv == "prod" && !strings.HasPrefix(cfg.PublicBaseURL, "https://") {
 		return cfg, errors.New("PUBLIC_BASE_URL must start with https:// in prod")
 	}
+	if cfg.PostgresMaxConns < 1 {
+		cfg.PostgresMaxConns = 1
+	}
+	if cfg.PostgresMinConns < 0 {
+		cfg.PostgresMinConns = 0
+	}
+	if cfg.PostgresMinConns > cfg.PostgresMaxConns {
+		cfg.PostgresMinConns = cfg.PostgresMaxConns
+	}
+	cfg.OrderSyncEvery = minDuration(cfg.OrderSyncEvery, time.Minute)
+	cfg.BackupEvery = minDuration(cfg.BackupEvery, time.Hour)
 	return cfg, nil
 }
 
@@ -156,6 +175,13 @@ func parseDuration(raw string) time.Duration {
 	v, err := time.ParseDuration(raw)
 	if err != nil {
 		return time.Minute
+	}
+	return v
+}
+
+func minDuration(v, min time.Duration) time.Duration {
+	if v < min {
+		return min
 	}
 	return v
 }
