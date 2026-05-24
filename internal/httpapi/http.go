@@ -18,6 +18,12 @@ func Mount(r chi.Router, service *app.Service, hub *payments.Hub, logger *slog.L
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
+	r.Get("/webhooks/{provider}", func(w http.ResponseWriter, r *http.Request) {
+		provider := chi.URLParam(r, "provider")
+		logger.Info("payment webhook probe", "provider", provider, "remote_addr", r.RemoteAddr, "forwarded_for", r.Header.Get("X-Forwarded-For"), "forwarded_proto", r.Header.Get("X-Forwarded-Proto"))
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("webhook endpoint is reachable; payment systems must send POST requests"))
+	})
 	r.Post("/webhooks/{provider}", func(w http.ResponseWriter, r *http.Request) {
 		provider := chi.URLParam(r, "provider")
 		raw, _ := io.ReadAll(r.Body)
