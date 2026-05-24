@@ -65,7 +65,7 @@ func Load() (Config, error) {
 		RedisAddr:      env("REDIS_ADDR", "localhost:6379"),
 		RedisPassword:  os.Getenv("REDIS_PASSWORD"),
 		RedisDB:        int(parseInt64(env("REDIS_DB", "0"))),
-		SocRocketAPIURL: env("SOC_ROCKET_API_URL", "https://soc-rocket.ru/api.php"),
+		SocRocketAPIURL: env("SOC_ROCKET_API_URL", "https://soc-rocket.ru/api/v2/"),
 		SocRocketAPIKey: os.Getenv("SOC_ROCKET_API_KEY"),
 		DefaultMarkup:   parseFloat(env("DEFAULT_MARKUP_PERCENT", "25")),
 		PlategaEnabled:  parseBool(env("PLATEGA_ENABLED", "true")),

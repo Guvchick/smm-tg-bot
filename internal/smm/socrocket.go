@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -22,7 +23,7 @@ type Client struct {
 
 func NewClient(baseURL, key string) *Client {
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
+		baseURL: normalizeBaseURL(baseURL),
 		key:     key,
 		http:    &http.Client{Timeout: 30 * time.Second},
 	}
@@ -119,15 +120,49 @@ func (c *Client) request(ctx context.Context, values url.Values, dest any) error
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "smm-tg-bot/1.0")
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("socrocket http status %d", resp.StatusCode)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return err
 	}
-	return json.NewDecoder(resp.Body).Decode(dest)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("socrocket http status %d: %s", resp.StatusCode, bodyPreview(body))
+	}
+	if looksHTML(body, resp.Header.Get("Content-Type")) {
+		return fmt.Errorf("socrocket returned html instead of json; use SOC_ROCKET_API_URL=https://soc-rocket.ru/api/v2/; response=%s", bodyPreview(body))
+	}
+	if err := json.Unmarshal(body, dest); err != nil {
+		return fmt.Errorf("socrocket json decode: %w; response=%s", err, bodyPreview(body))
+	}
+	return nil
+}
+
+func normalizeBaseURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasSuffix(raw, "/api.php") {
+		return "https://soc-rocket.ru/api/v2/"
+	}
+	return strings.TrimRight(raw, "/") + "/"
+}
+
+func looksHTML(body []byte, contentType string) bool {
+	trimmed := strings.TrimSpace(string(body))
+	return strings.Contains(strings.ToLower(contentType), "text/html") || strings.HasPrefix(trimmed, "<") || strings.HasPrefix(strings.ToLower(trimmed), "<!doctype")
+}
+
+func bodyPreview(body []byte) string {
+	text := strings.Join(strings.Fields(string(body)), " ")
+	runes := []rune(text)
+	if len(runes) > 240 {
+		return string(runes[:240]) + "..."
+	}
+	return text
 }
 
 func NormalizeStatus(providerStatus string) string {
