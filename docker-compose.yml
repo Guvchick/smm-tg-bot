@@ -93,6 +93,17 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
+  cloudflared:
+    profiles:
+      - tunnel
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      bot:
+        condition: service_healthy
+    logging: *default-logging
+    restart: unless-stopped
+
 volumes:
   pg_data:
   redis_data:
