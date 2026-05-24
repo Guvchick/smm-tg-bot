@@ -64,6 +64,10 @@ services:
       retries: 3
     logging: *default-logging
     restart: on-failure:5
+    networks:
+      default:
+        aliases:
+          - bot
 
   caddy:
     profiles:
@@ -85,6 +89,10 @@ services:
     depends_on:
       bot:
         condition: service_healthy
+    networks:
+      default:
+        aliases:
+          - caddy
     healthcheck:
       test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
       interval: 30s
@@ -101,6 +109,8 @@ services:
     depends_on:
       bot:
         condition: service_healthy
+    networks:
+      - default
     logging: *default-logging
     restart: unless-stopped
 
