@@ -250,6 +250,26 @@ func (s *Store) UserWaitingTransactions(ctx context.Context, userID int64, limit
 	return out, rows.Err()
 }
 
+func (s *Store) WaitingTransactionsByProvider(ctx context.Context, provider string, limit int) ([]domain.Transaction, error) {
+	if limit < 1 {
+		limit = 50
+	}
+	rows, err := s.db.Query(ctx, `select id,user_id,provider,provider_id,amount_cents,currency,status,pay_url,created_at from transactions where provider=$1 and status in ('created','waiting','pending') and coalesce(provider_id,'')<>'' order by created_at asc limit $2`, provider, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Transaction
+	for rows.Next() {
+		var tx domain.Transaction
+		if err := rows.Scan(&tx.ID, &tx.UserID, &tx.Provider, &tx.ProviderID, &tx.AmountCents, &tx.Currency, &tx.Status, &tx.PayURL, &tx.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, tx)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) LatestTransactions(ctx context.Context, limit int) ([]domain.Transaction, error) {
 	if s.orm != nil {
 		models, err := s.orm.LatestTransactions(limit)

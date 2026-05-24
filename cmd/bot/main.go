@@ -105,6 +105,9 @@ func main() {
 	if cfg.OrderSyncEnabled {
 		go service.RunOrderSync(ctx)
 	}
+	if cfg.PaymentPollEnabled {
+		go service.RunPaymentPoll(ctx)
+	}
 	if cfg.BackupEnabled {
 		go service.RunBackups(ctx)
 	}
