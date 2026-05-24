@@ -43,8 +43,6 @@ type Config struct {
 	CryptoBotToken  string
 	CryptoBotBase   string
 	ReferralPercent float64
-	PaymentPollEnabled bool
-	PaymentPollEvery   time.Duration
 	OrderSyncEnabled bool
 	OrderSyncEvery  time.Duration
 	BackupEnabled   bool
@@ -87,8 +85,6 @@ func Load() (Config, error) {
 		CryptoBotToken:  os.Getenv("CRYPTOBOT_TOKEN"),
 		CryptoBotBase:   strings.TrimRight(env("CRYPTOBOT_BASE_URL", "https://pay.crypt.bot"), "/"),
 		ReferralPercent: parseFloat(env("REFERRAL_PERCENT", "5")),
-		PaymentPollEnabled: parseBool(env("PAYMENT_POLL_ENABLED", "true")),
-		PaymentPollEvery:   parseDuration(env("PAYMENT_POLL_INTERVAL", "30s")),
 		OrderSyncEnabled: parseBool(env("ORDER_SYNC_ENABLED", "true")),
 		OrderSyncEvery:  parseDuration(env("ORDER_SYNC_INTERVAL", "5m")),
 		BackupEnabled:   parseBool(env("BACKUP_ENABLED", "true")),
@@ -115,7 +111,6 @@ func Load() (Config, error) {
 	if cfg.PostgresMinConns > cfg.PostgresMaxConns {
 		cfg.PostgresMinConns = cfg.PostgresMaxConns
 	}
-	cfg.PaymentPollEvery = minDuration(cfg.PaymentPollEvery, 15*time.Second)
 	cfg.OrderSyncEvery = minDuration(cfg.OrderSyncEvery, time.Minute)
 	cfg.BackupEvery = minDuration(cfg.BackupEvery, time.Hour)
 	return cfg, nil

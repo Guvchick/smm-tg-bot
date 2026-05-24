@@ -224,31 +224,14 @@ func (s *Service) CheckPayment(ctx context.Context, txID string, requesterTelegr
 	if tx.Provider != "cryptobot" {
 		return tx, fmt.Errorf("manual check is available only for CryptoBot")
 	}
-	event, err := s.checkPaymentTransaction(ctx, tx)
+	status, err := s.Payments.CheckInvoice(ctx, tx.Provider, tx.ProviderID)
 	if err != nil {
 		s.Log.Warn("manual payment check failed", "requester_telegram_id", requesterTelegramID, "provider", tx.Provider, "transaction_id", tx.ID, "provider_id", tx.ProviderID, "error", err)
 		return tx, err
 	}
-	if err := s.HandlePaymentEvent(ctx, event); err != nil {
-		return tx, err
-	}
-	updated, err := s.Store.GetTransaction(ctx, txID)
-	s.Log.Info("manual payment check handled", "requester_telegram_id", requesterTelegramID, "provider", tx.Provider, "transaction_id", tx.ID, "provider_id", tx.ProviderID, "previous_status", tx.Status, "status", event.Status, "credited", tx.Status != "paid" && event.Status == "paid", "error", err)
-	return updated, err
-}
-
-func (s *Service) checkPaymentTransaction(ctx context.Context, tx domain.Transaction) (payments.WebhookEvent, error) {
-	if tx.ProviderID == "" {
-		return payments.WebhookEvent{}, fmt.Errorf("transaction has no provider id")
-	}
-	status, err := s.Payments.CheckInvoice(ctx, tx.Provider, tx.ProviderID)
-	if err != nil {
-		return payments.WebhookEvent{}, err
-	}
 	event := payments.EventFromInvoiceStatus(tx.Provider, status)
-	event.LocalID = tx.ID
-	if event.ProviderID == "" {
-		event.ProviderID = tx.ProviderID
+	if event.LocalID == "" {
+		event.LocalID = tx.ID
 	}
 	if event.AmountCents == 0 {
 		event.AmountCents = tx.AmountCents
@@ -256,70 +239,12 @@ func (s *Service) checkPaymentTransaction(ctx context.Context, tx domain.Transac
 	if event.Currency == "" {
 		event.Currency = tx.Currency
 	}
-	if event.Status == "" {
-		event.Status = "pending"
+	if err := s.HandlePaymentEvent(ctx, event); err != nil {
+		return tx, err
 	}
-	return event, nil
-}
-
-func (s *Service) RunPaymentPoll(ctx context.Context) {
-	if s.Cfg.PaymentPollEvery < 15*time.Second {
-		s.Cfg.PaymentPollEvery = 15 * time.Second
-	}
-	s.Log.Info("payment poll started", "interval", s.Cfg.PaymentPollEvery.String(), "providers", []string{"cryptobot"})
-	s.pollPaymentProvider(ctx, "cryptobot")
-	ticker := time.NewTicker(s.Cfg.PaymentPollEvery)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.pollPaymentProvider(ctx, "cryptobot")
-		}
-	}
-}
-
-func (s *Service) pollPaymentProvider(ctx context.Context, provider string) {
-	start := time.Now()
-	if !s.Cfg.PaymentEnabled(provider) {
-		s.Log.Debug("payment poll provider disabled", "provider", provider)
-		return
-	}
-	pending, err := s.Store.WaitingTransactionsByProvider(ctx, provider, 100)
-	if err != nil {
-		s.Log.Warn("payment poll load failed", "provider", provider, "error", err)
-		return
-	}
-	if len(pending) == 0 {
-		s.Log.Debug("payment poll no pending transactions", "provider", provider)
-		return
-	}
-	var checked, paid, failed, stillPending int
-	for _, tx := range pending {
-		event, err := s.checkPaymentTransaction(ctx, tx)
-		if err != nil {
-			s.Log.Warn("payment poll invoice check failed", "provider", provider, "transaction_id", tx.ID, "provider_id", tx.ProviderID, "status", tx.Status, "error", err)
-			continue
-		}
-		checked++
-		switch event.Status {
-		case "paid":
-			paid++
-		case "failed":
-			failed++
-		default:
-			stillPending++
-		}
-		if event.Status == tx.Status {
-			continue
-		}
-		s.Log.Info("payment poll status changed", "provider", provider, "transaction_id", tx.ID, "provider_id", tx.ProviderID, "previous_status", tx.Status, "status", event.Status)
-		if err := s.HandlePaymentEvent(ctx, event); err != nil {
-			s.Log.Warn("payment poll event failed", "provider", provider, "transaction_id", tx.ID, "provider_id", tx.ProviderID, "status", event.Status, "error", err)
-		}
-	}
-	s.Log.Info("payment poll batch finished", "provider", provider, "pending", len(pending), "checked", checked, "paid", paid, "failed", failed, "still_pending", stillPending, "duration_ms", time.Since(start).Milliseconds())
+	updated, err := s.Store.GetTransaction(ctx, txID)
+	s.Log.Info("manual payment check handled", "requester_telegram_id", requesterTelegramID, "provider", tx.Provider, "transaction_id", tx.ID, "provider_id", tx.ProviderID, "previous_status", tx.Status, "status", event.Status, "credited", tx.Status != "paid" && event.Status == "paid", "error", err)
+	return updated, err
 }
 
 func (s *Service) RunOrderSync(ctx context.Context) {
