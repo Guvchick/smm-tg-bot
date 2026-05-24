@@ -96,6 +96,52 @@ func (s *Store) ListServices(ctx context.Context, limit int) ([]domain.Service, 
 	return out, rows.Err()
 }
 
+func (s *Store) ListCategories(ctx context.Context, limit, offset int) ([]string, error) {
+	rows, err := s.db.Query(ctx, `select category from services where enabled=true group by category order by category limit $1 offset $2`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var category string
+		if err := rows.Scan(&category); err != nil {
+			return nil, err
+		}
+		out = append(out, category)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CountCategories(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRow(ctx, `select count(*) from (select category from services where enabled=true group by category) c`).Scan(&count)
+	return count, err
+}
+
+func (s *Store) ListServicesByCategory(ctx context.Context, category string, limit, offset int) ([]domain.Service, error) {
+	rows, err := s.db.Query(ctx, `select id,name,category,rate,min_qty,max_qty,social,type,refill,cancel,coalesce(markup_percent,0),enabled from services where enabled=true and category=$1 order by name limit $2 offset $3`, category, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Service
+	for rows.Next() {
+		var svc domain.Service
+		if err := rows.Scan(&svc.ID, &svc.Name, &svc.Category, &svc.Rate, &svc.Min, &svc.Max, &svc.Social, &svc.Type, &svc.Refill, &svc.Cancel, &svc.Markup, &svc.Enabled); err != nil {
+			return nil, err
+		}
+		out = append(out, svc)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CountServicesByCategory(ctx context.Context, category string) (int, error) {
+	var count int
+	err := s.db.QueryRow(ctx, `select count(*) from services where enabled=true and category=$1`, category).Scan(&count)
+	return count, err
+}
+
 func (s *Store) GetService(ctx context.Context, id int64) (domain.Service, error) {
 	row := s.db.QueryRow(ctx, `select id,name,category,rate,min_qty,max_qty,social,type,refill,cancel,coalesce(markup_percent,0),enabled from services where id=$1`, id)
 	var svc domain.Service
@@ -172,6 +218,23 @@ func (s *Store) GetTransaction(ctx context.Context, id string) (domain.Transacti
 
 func (s *Store) UserTransactions(ctx context.Context, userID int64, limit int) ([]domain.Transaction, error) {
 	rows, err := s.db.Query(ctx, `select id,user_id,provider,provider_id,amount_cents,currency,status,pay_url,created_at from transactions where user_id=$1 order by created_at desc limit $2`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Transaction
+	for rows.Next() {
+		var tx domain.Transaction
+		if err := rows.Scan(&tx.ID, &tx.UserID, &tx.Provider, &tx.ProviderID, &tx.AmountCents, &tx.Currency, &tx.Status, &tx.PayURL, &tx.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, tx)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UserWaitingTransactions(ctx context.Context, userID int64, limit int) ([]domain.Transaction, error) {
+	rows, err := s.db.Query(ctx, `select id,user_id,provider,provider_id,amount_cents,currency,status,pay_url,created_at from transactions where user_id=$1 and status in ('created','waiting','pending') order by created_at desc limit $2`, userID, limit)
 	if err != nil {
 		return nil, err
 	}

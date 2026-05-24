@@ -66,11 +66,15 @@ func (s *Service) EnsureUser(ctx context.Context, tgUser *tgbotapi.User, lang do
 }
 
 func (s *Service) SyncServices(ctx context.Context) (int, error) {
+	start := time.Now()
 	services, err := s.SMM.Services(ctx)
 	if err != nil {
+		s.Log.Error("services sync failed", "error", err)
 		return 0, err
 	}
-	return len(services), s.Store.UpsertServices(ctx, services)
+	err = s.Store.UpsertServices(ctx, services)
+	s.Log.Info("services synced", "count", len(services), "duration_ms", time.Since(start).Milliseconds(), "error", err)
+	return len(services), err
 }
 
 func (s *Service) PriceCents(ctx context.Context, serviceID, quantity int64) (int64, error) {
@@ -90,16 +94,20 @@ func (s *Service) PriceCents(ctx context.Context, serviceID, quantity int64) (in
 }
 
 func (s *Service) SubmitOrder(ctx context.Context, u domain.User, serviceID int64, link string, quantity int64, extras map[string]string) (domain.Order, error) {
+	start := time.Now()
 	price, err := s.PriceCents(ctx, serviceID, quantity)
 	if err != nil {
+		s.Log.Warn("order price failed", "telegram_id", u.TelegramID, "service_id", serviceID, "quantity", quantity, "error", err)
 		return domain.Order{}, err
 	}
 	if err := s.Store.ChargeUser(ctx, u.ID, price); err != nil {
+		s.Log.Warn("order charge failed", "telegram_id", u.TelegramID, "service_id", serviceID, "quantity", quantity, "charge_cents", price, "error", err)
 		return domain.Order{}, err
 	}
 	socID, err := s.SMM.AddOrder(ctx, serviceID, link, quantity, extras)
 	if err != nil {
 		_ = s.Store.AddBalance(context.Background(), u.ID, price, false)
+		s.Log.Error("provider order failed", "telegram_id", u.TelegramID, "service_id", serviceID, "quantity", quantity, "charge_cents", price, "error", err)
 		return domain.Order{}, err
 	}
 	order, err := s.Store.CreateOrder(ctx, domain.Order{
@@ -107,8 +115,10 @@ func (s *Service) SubmitOrder(ctx context.Context, u domain.User, serviceID int6
 		ChargeCents: price, Status: "created", ProviderStatus: "Pending",
 	})
 	if err != nil {
+		s.Log.Error("order save failed", "telegram_id", u.TelegramID, "soc_order_id", socID, "error", err)
 		return order, err
 	}
+	s.Log.Info("order created", "order_id", order.ID, "telegram_id", u.TelegramID, "soc_order_id", socID, "service_id", serviceID, "quantity", quantity, "charge_cents", price, "duration_ms", time.Since(start).Milliseconds())
 	s.NotifyAdmins(fmt.Sprintf("🆕 Новый заказ #%d\nПользователь: %d\nSocRocket: %s\nУслуга: %d\nКол-во: %d\nСумма: %s", order.ID, u.TelegramID, socID, serviceID, quantity, storage.FormatMoney(price)))
 	return order, nil
 }
@@ -128,9 +138,11 @@ func (s *Service) SubmitMassOrder(ctx context.Context, u domain.User, lines []Ma
 }
 
 func (s *Service) CreateDeposit(ctx context.Context, u domain.User, provider string, amountCents int64) (domain.Transaction, error) {
+	start := time.Now()
 	id := uuid.NewString()
 	tx := domain.Transaction{ID: id, UserID: u.ID, Provider: provider, AmountCents: amountCents, Currency: "RUB", Status: "created"}
 	if err := s.Store.CreateTransaction(ctx, tx); err != nil {
+		s.Log.Error("deposit create transaction failed", "telegram_id", u.TelegramID, "provider", provider, "amount_cents", amountCents, "error", err)
 		return tx, err
 	}
 	invoice, err := s.Payments.CreateInvoice(ctx, provider, payments.InvoiceRequest{
@@ -139,6 +151,7 @@ func (s *Service) CreateDeposit(ctx context.Context, u domain.User, provider str
 	})
 	if err != nil {
 		_, _ = s.Store.UpdateTransaction(ctx, id, "", "failed", "", []byte(`{}`))
+		s.Log.Error("deposit invoice failed", "telegram_id", u.TelegramID, "provider", provider, "transaction_id", id, "amount_cents", amountCents, "error", err)
 		return tx, err
 	}
 	tx.ProviderID = invoice.ProviderID
@@ -146,22 +159,27 @@ func (s *Service) CreateDeposit(ctx context.Context, u domain.User, provider str
 	tx.Status = "waiting"
 	raw, _ := json.Marshal(invoice)
 	_, err = s.Store.UpdateTransaction(ctx, id, invoice.ProviderID, "waiting", invoice.PayURL, raw)
+	s.Log.Info("deposit invoice created", "telegram_id", u.TelegramID, "provider", provider, "transaction_id", id, "provider_id", invoice.ProviderID, "amount_cents", amountCents, "duration_ms", time.Since(start).Milliseconds(), "error", err)
 	return tx, err
 }
 
 func (s *Service) HandlePaymentEvent(ctx context.Context, event payments.WebhookEvent) error {
+	start := time.Now()
 	raw := event.Raw
 	if len(raw) == 0 {
 		raw = []byte(`{}`)
 	}
 	prev, err := s.Store.GetTransaction(ctx, event.LocalID)
 	if err != nil {
+		s.Log.Warn("payment event transaction not found", "provider", event.Provider, "provider_id", event.ProviderID, "local_id", event.LocalID, "status", event.Status, "error", err)
 		return err
 	}
 	tx, err := s.Store.UpdateTransaction(ctx, event.LocalID, event.ProviderID, event.Status, "", raw)
 	if err != nil {
+		s.Log.Error("payment event update failed", "provider", event.Provider, "provider_id", event.ProviderID, "local_id", event.LocalID, "status", event.Status, "error", err)
 		return err
 	}
+	s.Log.Info("payment event handled", "provider", event.Provider, "provider_id", event.ProviderID, "local_id", event.LocalID, "status", event.Status, "previous_status", prev.Status, "amount_cents", tx.AmountCents, "duration_ms", time.Since(start).Milliseconds())
 	if event.Status == "paid" && prev.Status != "paid" {
 		if err := s.Store.AddBalance(ctx, tx.UserID, tx.AmountCents, false); err != nil {
 			return err
@@ -186,6 +204,46 @@ func (s *Service) HandlePaymentEvent(ctx context.Context, event payments.Webhook
 		s.NotifyAdmins(fmt.Sprintf("💳 Оплата: %s\nПровайдер: %s\nТранзакция: %s", storage.FormatMoney(tx.AmountCents), event.Provider, event.LocalID))
 	}
 	return nil
+}
+
+func (s *Service) CheckPayment(ctx context.Context, txID string, requesterTelegramID int64) (domain.Transaction, error) {
+	tx, err := s.Store.GetTransaction(ctx, txID)
+	if err != nil {
+		return tx, err
+	}
+	if !s.IsAdmin(requesterTelegramID) {
+		u, err := s.Store.GetUserByTelegram(ctx, requesterTelegramID)
+		if err != nil {
+			return tx, err
+		}
+		if u.ID != tx.UserID {
+			return tx, fmt.Errorf("transaction belongs to another user")
+		}
+	}
+	if tx.Provider != "cryptobot" {
+		return tx, fmt.Errorf("manual check is available only for CryptoBot")
+	}
+	status, err := s.Payments.CheckInvoice(ctx, tx.Provider, tx.ProviderID)
+	if err != nil {
+		s.Log.Warn("manual payment check failed", "requester_telegram_id", requesterTelegramID, "provider", tx.Provider, "transaction_id", tx.ID, "provider_id", tx.ProviderID, "error", err)
+		return tx, err
+	}
+	event := payments.EventFromInvoiceStatus(tx.Provider, status)
+	if event.LocalID == "" {
+		event.LocalID = tx.ID
+	}
+	if event.AmountCents == 0 {
+		event.AmountCents = tx.AmountCents
+	}
+	if event.Currency == "" {
+		event.Currency = tx.Currency
+	}
+	if err := s.HandlePaymentEvent(ctx, event); err != nil {
+		return tx, err
+	}
+	updated, err := s.Store.GetTransaction(ctx, txID)
+	s.Log.Info("manual payment check handled", "requester_telegram_id", requesterTelegramID, "provider", tx.Provider, "transaction_id", tx.ID, "provider_id", tx.ProviderID, "status", event.Status, "error", err)
+	return updated, err
 }
 
 func (s *Service) RunOrderSync(ctx context.Context) {

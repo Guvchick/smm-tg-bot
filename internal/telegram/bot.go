@@ -100,6 +100,7 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message, u domain
 	args := msg.CommandArguments()
 	switch msg.Command() {
 	case "start":
+		b.removeReplyKeyboard(msg.Chat.ID)
 		b.showMain(ctx, msg.Chat.ID, u)
 	case "sync_services":
 		if !b.requireAdmin(msg) {
@@ -240,30 +241,117 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	data := cb.Data
 	_, _ = b.api.Request(tgbotapi.NewCallback(cb.ID, ""))
 	switch {
+	case data == "menu:main":
+		b.editMain(ctx, msg.Chat.ID, msg.MessageID, u)
+	case data == "menu:profile":
+		b.editProfile(ctx, msg.Chat.ID, msg.MessageID, u)
+	case data == "menu:order":
+		b.editOrderCategories(ctx, msg.Chat.ID, msg.MessageID, 0)
+	case data == "menu:mass":
+		b.startMassOrder(ctx, msg.Chat.ID, cb.From.ID)
+	case data == "menu:topup":
+		b.editTopup(msg.Chat.ID, msg.MessageID)
+	case data == "menu:info":
+		b.editInfoMenu(msg.Chat.ID, msg.MessageID)
+	case data == "menu:ref":
+		text := fmt.Sprintf("🤝 Ваша реферальная ссылка:\nhttps://t.me/%s?start=ref_%d", b.api.Self.UserName, u.TelegramID)
+		kb := backKeyboard()
+		b.edit(msg.Chat.ID, msg.MessageID, text, &kb)
+	case data == "menu:lang":
+		kb := langKeyboard()
+		b.edit(msg.Chat.ID, msg.MessageID, "Выберите язык:", &kb)
+	case data == "menu:admin":
+		if b.service.IsAdmin(cb.From.ID) {
+			b.editAdmin(msg.Chat.ID, msg.MessageID)
+		}
+	case strings.HasPrefix(data, "order:cat:"):
+		page, _ := strconv.Atoi(strings.TrimPrefix(data, "order:cat:"))
+		b.editOrderCategories(ctx, msg.Chat.ID, msg.MessageID, page)
+	case strings.HasPrefix(data, "order:pick:"):
+		parts := strings.Split(data, ":")
+		if len(parts) == 4 {
+			catPage, _ := strconv.Atoi(parts[2])
+			catIndex, _ := strconv.Atoi(parts[3])
+			b.editCategoryServices(ctx, msg.Chat.ID, msg.MessageID, catPage, catIndex, 0)
+		}
+	case strings.HasPrefix(data, "order:svcpage:"):
+		parts := strings.Split(data, ":")
+		if len(parts) == 5 {
+			catPage, _ := strconv.Atoi(parts[2])
+			catIndex, _ := strconv.Atoi(parts[3])
+			svcPage, _ := strconv.Atoi(parts[4])
+			b.editCategoryServices(ctx, msg.Chat.ID, msg.MessageID, catPage, catIndex, svcPage)
+		}
+	case strings.HasPrefix(data, "order:svc:"):
+		serviceID, _ := strconv.ParseInt(strings.TrimPrefix(data, "order:svc:"), 10, 64)
+		b.selectService(ctx, msg.Chat.ID, msg.MessageID, cb.From.ID, serviceID)
 	case strings.HasPrefix(data, "lang:"):
 		lang := domain.Language(strings.TrimPrefix(data, "lang:"))
 		_ = b.service.Store.SetLanguage(ctx, cb.From.ID, lang)
 		u.Language = lang
-		b.showMain(ctx, msg.Chat.ID, u)
+		b.editMain(ctx, msg.Chat.ID, msg.MessageID, u)
 	case strings.HasPrefix(data, "info:"):
 		slug := strings.TrimPrefix(data, "info:")
 		title, body, err := b.service.Store.InfoPage(ctx, u.Language, slug)
 		if err != nil {
-			b.reply(msg.Chat.ID, "Раздел пока пуст.", nil)
+			kb := infoKeyboard()
+			b.edit(msg.Chat.ID, msg.MessageID, "Раздел пока пуст.", &kb)
 			return
 		}
-		b.reply(msg.Chat.ID, "<b>"+esc(title)+"</b>\n\n"+esc(body), nil)
+		kb := infoKeyboard()
+		b.edit(msg.Chat.ID, msg.MessageID, "<b>"+esc(title)+"</b>\n\n"+esc(body), &kb)
 	case strings.HasPrefix(data, "pay:"):
 		provider := strings.TrimPrefix(data, "pay:")
 		if !b.service.Cfg.PaymentEnabled(provider) {
-			b.reply(msg.Chat.ID, "Эта платежная система сейчас отключена.", nil)
+			kb := topupKeyboard(b.service.Cfg.PaymentEnabled)
+			b.edit(msg.Chat.ID, msg.MessageID, "Эта платежная система сейчас отключена.", &kb)
 			return
 		}
-		b.reply(msg.Chat.ID, "Введите сумму пополнения в RUB, например 500", nil)
+		kb := backKeyboard()
+		b.edit(msg.Chat.ID, msg.MessageID, "Введите сумму пополнения в RUB, например 500", &kb)
 		_ = b.service.SaveDraft(ctx, cb.From.ID, app.OrderDraft{Mode: "topup", Step: provider})
+	case strings.HasPrefix(data, "paycheck:"):
+		txID := strings.TrimPrefix(data, "paycheck:")
+		tx, err := b.service.CheckPayment(ctx, txID, cb.From.ID)
+		if err != nil {
+			kb := backKeyboard()
+			b.edit(msg.Chat.ID, msg.MessageID, "Не удалось проверить оплату: "+esc(err.Error()), &kb)
+			return
+		}
+		text := fmt.Sprintf("💳 Оплата %s\nСтатус: %s\nСумма: %s", tx.Provider, tx.Status, storage.FormatMoney(tx.AmountCents))
+		kb := backKeyboard()
+		b.edit(msg.Chat.ID, msg.MessageID, text, &kb)
 	case data == "admin:stats":
 		if b.service.IsAdmin(cb.From.ID) {
-			b.showStats(ctx, msg.Chat.ID)
+			b.editStats(ctx, msg.Chat.ID, msg.MessageID)
+		}
+	case data == "admin:users":
+		if b.service.IsAdmin(cb.From.ID) {
+			b.editUsers(ctx, msg.Chat.ID, msg.MessageID)
+		}
+	case data == "admin:payments":
+		if b.service.IsAdmin(cb.From.ID) {
+			b.editPayments(ctx, msg.Chat.ID, msg.MessageID)
+		}
+	case data == "admin:sync":
+		if b.service.IsAdmin(cb.From.ID) {
+			n, err := b.service.SyncServices(ctx)
+			text := fmt.Sprintf("✅ Услуги обновлены: %d", n)
+			if err != nil {
+				text = "Ошибка синхронизации: " + esc(err.Error())
+			}
+			kb := adminKeyboard()
+			b.edit(msg.Chat.ID, msg.MessageID, text, &kb)
+		}
+	case data == "admin:backup":
+		if b.service.IsAdmin(cb.From.ID) {
+			err := b.service.SendBackup(ctx)
+			text := "✅ Бэкап отправлен"
+			if err != nil {
+				text = "Ошибка бэкапа: " + esc(err.Error())
+			}
+			kb := adminKeyboard()
+			b.edit(msg.Chat.ID, msg.MessageID, text, &kb)
 		}
 	}
 }
@@ -298,7 +386,14 @@ func (b *Bot) handleDraft(ctx context.Context, msg *tgbotapi.Message, u domain.U
 			b.reply(msg.Chat.ID, "Не удалось создать оплату: "+err.Error(), nil)
 			return true
 		}
-		kb := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonURL("💳 Оплатить", tx.PayURL)))
+		rows := [][]tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonURL("💳 Оплатить", tx.PayURL)),
+		}
+		if tx.Provider == "cryptobot" {
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🔎 Проверить оплату", "paycheck:"+tx.ID)))
+		}
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Меню", "menu:main")))
+		kb := tgbotapi.NewInlineKeyboardMarkup(rows...)
 		b.reply(msg.Chat.ID, "Счет создан. После оплаты баланс пополнится автоматически через webhook.", kb)
 		return true
 	default:
@@ -377,12 +472,29 @@ func (b *Bot) ensureUser(ctx context.Context, msg *tgbotapi.Message) (domain.Use
 
 func (b *Bot) showMain(ctx context.Context, chatID int64, u domain.User) {
 	b.sendAsset(ctx, chatID, "main")
-	b.reply(chatID, i18n.T(u.Language, "main"), mainKeyboard(u.Language, b.service.IsAdmin(u.TelegramID)))
+	kb := mainKeyboard(u.Language, b.service.IsAdmin(u.TelegramID))
+	b.reply(chatID, i18n.T(u.Language, "main"), kb)
+}
+
+func (b *Bot) editMain(ctx context.Context, chatID int64, messageID int, u domain.User) {
+	kb := mainKeyboard(u.Language, b.service.IsAdmin(u.TelegramID))
+	b.edit(chatID, messageID, i18n.T(u.Language, "main"), &kb)
 }
 
 func (b *Bot) showProfile(ctx context.Context, chatID int64, u domain.User) {
+	text, kb := b.profileView(ctx, u)
+	b.reply(chatID, text, kb)
+}
+
+func (b *Bot) editProfile(ctx context.Context, chatID int64, messageID int, u domain.User) {
+	text, kb := b.profileView(ctx, u)
+	b.edit(chatID, messageID, text, &kb)
+}
+
+func (b *Bot) profileView(ctx context.Context, u domain.User) (string, tgbotapi.InlineKeyboardMarkup) {
 	orders, _ := b.service.Store.ListUserOrders(ctx, u.ID, 5)
 	txs, _ := b.service.Store.UserTransactions(ctx, u.ID, 5)
+	waiting, _ := b.service.Store.UserWaitingTransactions(ctx, u.ID, 5)
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("👤 <b>Профиль</b>\nID: %d\nБаланс: %s\nБонусы: %s\n\n", u.TelegramID, storage.FormatMoney(u.BalanceCents), storage.FormatMoney(u.BonusCents)))
 	sb.WriteString("🧾 Последние заказы:\n")
@@ -399,20 +511,18 @@ func (b *Bot) showProfile(ctx context.Context, chatID int64, u domain.User) {
 	for _, tx := range txs {
 		sb.WriteString(fmt.Sprintf("%s %s %s\n", tx.Provider, tx.Status, storage.FormatMoney(tx.AmountCents)))
 	}
-	b.reply(chatID, sb.String(), nil)
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for _, tx := range waiting {
+		if tx.Provider == "cryptobot" && tx.ProviderID != "" {
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🔎 Проверить CryptoBot "+storage.FormatMoney(tx.AmountCents), "paycheck:"+tx.ID)))
+		}
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Назад", "menu:main")))
+	return sb.String(), tgbotapi.NewInlineKeyboardMarkup(rows...)
 }
 
 func (b *Bot) startSingleOrder(ctx context.Context, chatID, tgID int64) {
-	services, err := b.service.Store.ListServices(ctx, 10)
-	var hint strings.Builder
-	hint.WriteString("🛒 Введите ID услуги.\n\nПервые услуги:\n")
-	if err == nil {
-		for _, svc := range services {
-			hint.WriteString(fmt.Sprintf("%d — %s (%d-%d)\n", svc.ID, svc.Name, svc.Min, svc.Max))
-		}
-	}
-	_ = b.service.SaveDraft(ctx, tgID, app.OrderDraft{Mode: "single", Step: "service", Extras: map[string]string{}})
-	b.reply(chatID, hint.String(), nil)
+	b.showOrderCategories(ctx, chatID, 0)
 }
 
 func (b *Bot) startMassOrder(ctx context.Context, chatID, tgID int64) {
@@ -421,84 +531,106 @@ func (b *Bot) startMassOrder(ctx context.Context, chatID, tgID int64) {
 }
 
 func (b *Bot) showTopup(chatID int64) {
-	var buttons []tgbotapi.InlineKeyboardButton
-	if b.service.Cfg.PaymentEnabled("platega") {
-		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("💳 Platega", "pay:platega"))
-	}
-	if b.service.Cfg.PaymentEnabled("pally") {
-		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("💎 Pally", "pay:pally"))
-	}
-	if b.service.Cfg.PaymentEnabled("heleket") {
-		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("🪙 Heleket", "pay:heleket"))
-	}
-	if b.service.Cfg.PaymentEnabled("cryptobot") {
-		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("🤖 CryptoBot", "pay:cryptobot"))
-	}
-	if len(buttons) == 0 {
+	kb := topupKeyboard(b.service.Cfg.PaymentEnabled)
+	if len(kb.InlineKeyboard) == 1 {
 		b.reply(chatID, "Пополнение временно отключено.", nil)
 		return
 	}
-	var rows [][]tgbotapi.InlineKeyboardButton
-	for i := 0; i < len(buttons); i += 2 {
-		end := i + 2
-		if end > len(buttons) {
-			end = len(buttons)
-		}
-		rows = append(rows, buttons[i:end])
-	}
-	kb := tgbotapi.NewInlineKeyboardMarkup(rows...)
 	b.reply(chatID, "Выберите платежную систему:", kb)
 }
 
+func (b *Bot) editTopup(chatID int64, messageID int) {
+	kb := topupKeyboard(b.service.Cfg.PaymentEnabled)
+	if len(kb.InlineKeyboard) == 1 {
+		b.edit(chatID, messageID, "Пополнение временно отключено.", &kb)
+		return
+	}
+	b.edit(chatID, messageID, "Выберите платежную систему:", &kb)
+}
+
 func (b *Bot) showInfoMenu(chatID int64) {
-	kb := tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("📜 Правила", "info:rules")),
-		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🔐 Политика", "info:privacy")),
-		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🧾 Оферта", "info:offer")),
-	)
+	kb := infoKeyboard()
 	b.reply(chatID, "ℹ️ Информация:", kb)
 }
 
+func (b *Bot) editInfoMenu(chatID int64, messageID int) {
+	kb := infoKeyboard()
+	b.edit(chatID, messageID, "ℹ️ Информация:", &kb)
+}
+
 func (b *Bot) showAdmin(chatID int64) {
-	kb := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("📊 Статистика", "admin:stats")))
-	b.reply(chatID, "🛠 Админ-панель\n\nКоманды:\n/sync_services\n/users\n/payments\n/setmarkup SERVICE_ID PERCENT\n/createpromo CODE BONUS_PERCENT USES [MIN_RUB]\n/setinfo ru rules TEXT\n/setasset main photo FILE_ID\n/broadcast TEXT\n/backup", kb)
+	kb := adminKeyboard()
+	b.reply(chatID, "🛠 Админ-панель", kb)
+}
+
+func (b *Bot) editAdmin(chatID int64, messageID int) {
+	kb := adminKeyboard()
+	b.edit(chatID, messageID, "🛠 Админ-панель", &kb)
 }
 
 func (b *Bot) showStats(ctx context.Context, chatID int64) {
+	text := b.statsText(ctx)
+	b.reply(chatID, text, nil)
+}
+
+func (b *Bot) editStats(ctx context.Context, chatID int64, messageID int) {
+	kb := adminKeyboard()
+	b.edit(chatID, messageID, b.statsText(ctx), &kb)
+}
+
+func (b *Bot) statsText(ctx context.Context) string {
 	stats, err := b.service.Store.Stats(ctx)
 	if err != nil {
-		b.reply(chatID, "Ошибка статистики: "+err.Error(), nil)
-		return
+		return "Ошибка статистики: " + esc(err.Error())
 	}
-	b.reply(chatID, fmt.Sprintf("📊 Статистика\nПользователи: %d\nЗаказы: %d\nОплат: %d\nОборот: %s", stats["users"], stats["orders"], stats["paid_transactions"], storage.FormatMoney(stats["revenue_cents"])), nil)
+	return fmt.Sprintf("📊 Статистика\nПользователи: %d\nЗаказы: %d\nОплат: %d\nОборот: %s", stats["users"], stats["orders"], stats["paid_transactions"], storage.FormatMoney(stats["revenue_cents"]))
 }
 
 func (b *Bot) showUsers(ctx context.Context, chatID int64) {
+	text := b.usersText(ctx)
+	b.reply(chatID, text, nil)
+}
+
+func (b *Bot) editUsers(ctx context.Context, chatID int64, messageID int) {
+	kb := adminKeyboard()
+	b.edit(chatID, messageID, b.usersText(ctx), &kb)
+}
+
+func (b *Bot) usersText(ctx context.Context) string {
 	users, err := b.service.Store.LatestUsers(ctx, 15)
 	if err != nil {
-		b.reply(chatID, "Ошибка: "+err.Error(), nil)
-		return
+		return "Ошибка: " + esc(err.Error())
 	}
 	var sb strings.Builder
 	sb.WriteString("👥 Последние пользователи:\n")
 	for _, u := range users {
 		sb.WriteString(fmt.Sprintf("%d @%s %s баланс %s\n", u.TelegramID, u.Username, u.FirstName, storage.FormatMoney(u.BalanceCents)))
 	}
-	b.reply(chatID, sb.String(), nil)
+	return sb.String()
 }
 
 func (b *Bot) showPayments(ctx context.Context, chatID int64) {
+	text := b.paymentsText(ctx)
+	kb := paymentsKeyboard(ctx, b.service.Store)
+	b.reply(chatID, text, kb)
+}
+
+func (b *Bot) editPayments(ctx context.Context, chatID int64, messageID int) {
+	kb := paymentsKeyboard(ctx, b.service.Store)
+	b.edit(chatID, messageID, b.paymentsText(ctx), &kb)
+}
+
+func (b *Bot) paymentsText(ctx context.Context) string {
 	txs, err := b.service.Store.LatestTransactions(ctx, 15)
 	if err != nil {
-		b.reply(chatID, "Ошибка: "+err.Error(), nil)
-		return
+		return "Ошибка: " + esc(err.Error())
 	}
 	var sb strings.Builder
 	sb.WriteString("💳 Последние оплаты:\n")
 	for _, tx := range txs {
 		sb.WriteString(fmt.Sprintf("%s %s user:%d %s\n", tx.Provider, tx.Status, tx.UserID, storage.FormatMoney(tx.AmountCents)))
 	}
-	b.reply(chatID, sb.String(), nil)
+	return sb.String()
 }
 
 func (b *Bot) sendAsset(ctx context.Context, chatID int64, menuKey string) {
@@ -516,12 +648,124 @@ func (b *Bot) sendAsset(ctx context.Context, chatID int64, menuKey string) {
 	_, _ = b.api.Send(tgbotapi.NewPhoto(chatID, tgbotapi.FileID(asset.FileID)))
 }
 
+func (b *Bot) showOrderCategories(ctx context.Context, chatID int64, page int) {
+	text, kb := b.orderCategoriesView(ctx, page)
+	b.reply(chatID, text, kb)
+}
+
+func (b *Bot) editOrderCategories(ctx context.Context, chatID int64, messageID int, page int) {
+	text, kb := b.orderCategoriesView(ctx, page)
+	b.edit(chatID, messageID, text, &kb)
+}
+
+func (b *Bot) orderCategoriesView(ctx context.Context, page int) (string, tgbotapi.InlineKeyboardMarkup) {
+	const perPage = 8
+	if page < 0 {
+		page = 0
+	}
+	categories, err := b.service.Store.ListCategories(ctx, perPage, page*perPage)
+	if err != nil {
+		kb := backKeyboard()
+		return "Не удалось загрузить категории: " + esc(err.Error()), kb
+	}
+	total, _ := b.service.Store.CountCategories(ctx)
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for i, category := range categories {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("▫️ "+short(category, 48), fmt.Sprintf("order:pick:%d:%d", page, i))))
+	}
+	var nav []tgbotapi.InlineKeyboardButton
+	if page > 0 {
+		nav = append(nav, tgbotapi.NewInlineKeyboardButtonData("⬅️", fmt.Sprintf("order:cat:%d", page-1)))
+	}
+	if (page+1)*perPage < total {
+		nav = append(nav, tgbotapi.NewInlineKeyboardButtonData("➡️", fmt.Sprintf("order:cat:%d", page+1)))
+	}
+	if len(nav) > 0 {
+		rows = append(rows, nav)
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Меню", "menu:main")))
+	if len(categories) == 0 {
+		return "🛒 Услуги пока не загружены. Админ может нажать «Синхронизировать услуги» в админ-панели.", tgbotapi.NewInlineKeyboardMarkup(rows...)
+	}
+	return fmt.Sprintf("🛒 Выберите категорию\nСтраница %d", page+1), tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+func (b *Bot) editCategoryServices(ctx context.Context, chatID int64, messageID int, catPage, catIndex, svcPage int) {
+	text, kb := b.categoryServicesView(ctx, catPage, catIndex, svcPage)
+	b.edit(chatID, messageID, text, &kb)
+}
+
+func (b *Bot) categoryServicesView(ctx context.Context, catPage, catIndex, svcPage int) (string, tgbotapi.InlineKeyboardMarkup) {
+	const catPerPage = 8
+	const svcPerPage = 7
+	categories, err := b.service.Store.ListCategories(ctx, catPerPage, catPage*catPerPage)
+	if err != nil || catIndex < 0 || catIndex >= len(categories) {
+		kb := backKeyboard()
+		if err != nil {
+			return "Не удалось загрузить категорию: " + esc(err.Error()), kb
+		}
+		return "Категория не найдена.", kb
+	}
+	category := categories[catIndex]
+	services, err := b.service.Store.ListServicesByCategory(ctx, category, svcPerPage, svcPage*svcPerPage)
+	if err != nil {
+		kb := backKeyboard()
+		return "Не удалось загрузить услуги: " + esc(err.Error()), kb
+	}
+	total, _ := b.service.Store.CountServicesByCategory(ctx, category)
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for _, svc := range services {
+		label := fmt.Sprintf("▫️ %s | %d-%d", short(svc.Name, 38), svc.Min, svc.Max)
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(label, fmt.Sprintf("order:svc:%d", svc.ID))))
+	}
+	var nav []tgbotapi.InlineKeyboardButton
+	if svcPage > 0 {
+		nav = append(nav, tgbotapi.NewInlineKeyboardButtonData("⬅️", fmt.Sprintf("order:svcpage:%d:%d:%d", catPage, catIndex, svcPage-1)))
+	}
+	if (svcPage+1)*svcPerPage < total {
+		nav = append(nav, tgbotapi.NewInlineKeyboardButtonData("➡️", fmt.Sprintf("order:svcpage:%d:%d:%d", catPage, catIndex, svcPage+1)))
+	}
+	if len(nav) > 0 {
+		rows = append(rows, nav)
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Категории", fmt.Sprintf("order:cat:%d", catPage))))
+	return fmt.Sprintf("🛒 <b>%s</b>\nВыберите услугу", esc(category)), tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+func (b *Bot) selectService(ctx context.Context, chatID int64, messageID int, tgID int64, serviceID int64) {
+	svc, err := b.service.Store.GetService(ctx, serviceID)
+	if err != nil {
+		kb := backKeyboard()
+		b.edit(chatID, messageID, "Услуга не найдена: "+esc(err.Error()), &kb)
+		return
+	}
+	_ = b.service.SaveDraft(ctx, tgID, app.OrderDraft{Mode: "single", Step: "link", ServiceID: serviceID, Extras: map[string]string{}})
+	kb := backKeyboard()
+	text := fmt.Sprintf("🛒 <b>%s</b>\nID: %d\nМин: %d\nМакс: %d\n\nОтправьте ссылку для заказа.", esc(svc.Name), svc.ID, svc.Min, svc.Max)
+	b.edit(chatID, messageID, text, &kb)
+}
+
 func (b *Bot) reply(chatID int64, text string, markup any) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ParseMode = "HTML"
 	if markup != nil {
 		msg.ReplyMarkup = markup
 	}
+	_, _ = b.api.Send(msg)
+}
+
+func (b *Bot) edit(chatID int64, messageID int, text string, markup *tgbotapi.InlineKeyboardMarkup) {
+	msg := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	msg.ParseMode = "HTML"
+	if markup != nil {
+		msg.ReplyMarkup = markup
+	}
+	_, _ = b.api.Send(msg)
+}
+
+func (b *Bot) removeReplyKeyboard(chatID int64) {
+	msg := tgbotapi.NewMessage(chatID, "Меню обновлено.")
+	msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
 	_, _ = b.api.Send(msg)
 }
 
@@ -533,18 +777,16 @@ func (b *Bot) requireAdmin(msg *tgbotapi.Message) bool {
 	return false
 }
 
-func mainKeyboard(lang domain.Language, admin bool) tgbotapi.ReplyKeyboardMarkup {
-	rows := [][]tgbotapi.KeyboardButton{
-		{tgbotapi.NewKeyboardButton(i18n.T(lang, "order")), tgbotapi.NewKeyboardButton(i18n.T(lang, "mass_order"))},
-		{tgbotapi.NewKeyboardButton(i18n.T(lang, "profile")), tgbotapi.NewKeyboardButton(i18n.T(lang, "topup"))},
-		{tgbotapi.NewKeyboardButton(i18n.T(lang, "info")), tgbotapi.NewKeyboardButton(i18n.T(lang, "ref")), tgbotapi.NewKeyboardButton(i18n.T(lang, "lang"))},
+func mainKeyboard(lang domain.Language, admin bool) tgbotapi.InlineKeyboardMarkup {
+	rows := [][]tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "order"), "menu:order"), tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "mass_order"), "menu:mass")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "profile"), "menu:profile"), tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "topup"), "menu:topup")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "info"), "menu:info"), tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "ref"), "menu:ref"), tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "lang"), "menu:lang")),
 	}
 	if admin {
-		rows = append(rows, []tgbotapi.KeyboardButton{tgbotapi.NewKeyboardButton(i18n.T(lang, "admin"))})
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "admin"), "menu:admin")))
 	}
-	kb := tgbotapi.NewReplyKeyboard(rows...)
-	kb.ResizeKeyboard = true
-	return kb
+	return tgbotapi.NewInlineKeyboardMarkup(rows...)
 }
 
 func langKeyboard() tgbotapi.InlineKeyboardMarkup {
@@ -554,7 +796,79 @@ func langKeyboard() tgbotapi.InlineKeyboardMarkup {
 			tgbotapi.NewInlineKeyboardButtonData("🇬🇧 English", "lang:en"),
 			tgbotapi.NewInlineKeyboardButtonData("🇺🇦 Українська", "lang:uk"),
 		),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Назад", "menu:main")),
 	)
+}
+
+func topupKeyboard(enabled func(string) bool) tgbotapi.InlineKeyboardMarkup {
+	var buttons []tgbotapi.InlineKeyboardButton
+	if enabled("platega") {
+		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("💳 Platega", "pay:platega"))
+	}
+	if enabled("pally") {
+		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("💎 Pally", "pay:pally"))
+	}
+	if enabled("heleket") {
+		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("🪙 Heleket", "pay:heleket"))
+	}
+	if enabled("cryptobot") {
+		buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData("🤖 CryptoBot", "pay:cryptobot"))
+	}
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for i := 0; i < len(buttons); i += 2 {
+		end := i + 2
+		if end > len(buttons) {
+			end = len(buttons)
+		}
+		rows = append(rows, buttons[i:end])
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Назад", "menu:main")))
+	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+func infoKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("📜 Правила", "info:rules")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🔐 Политика", "info:privacy")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🧾 Оферта", "info:offer")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Назад", "menu:main")),
+	)
+}
+
+func adminKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("📊 Статистика", "admin:stats"), tgbotapi.NewInlineKeyboardButtonData("👥 Юзеры", "admin:users")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("💳 Оплаты", "admin:payments"), tgbotapi.NewInlineKeyboardButtonData("🔄 Синхронизировать услуги", "admin:sync")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🗄 Бэкап", "admin:backup")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Меню", "menu:main")),
+	)
+}
+
+func backKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Назад", "menu:main")))
+}
+
+func paymentsKeyboard(ctx context.Context, store *storage.Store) tgbotapi.InlineKeyboardMarkup {
+	txs, _ := store.LatestTransactions(ctx, 10)
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for _, tx := range txs {
+		if tx.Provider == "cryptobot" && tx.ProviderID != "" && tx.Status != "paid" {
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🔎 Проверить "+storage.FormatMoney(tx.AmountCents), "paycheck:"+tx.ID)))
+		}
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Админка", "menu:admin")))
+	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+func short(s string, max int) string {
+	if len([]rune(s)) <= max {
+		return s
+	}
+	r := []rune(s)
+	if max <= 1 {
+		return string(r[:max])
+	}
+	return string(r[:max-1]) + "…"
 }
 
 func esc(s string) string {

@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -13,6 +14,7 @@ import (
 )
 
 func Mount(r chi.Router, service *app.Service, hub *payments.Hub, logger *slog.Logger) {
+	r.Use(requestLogger(logger))
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -20,6 +22,7 @@ func Mount(r chi.Router, service *app.Service, hub *payments.Hub, logger *slog.L
 		provider := chi.URLParam(r, "provider")
 		raw, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(raw))
+		logger.Info("payment webhook received", "provider", provider, "bytes", len(raw), "remote_addr", r.RemoteAddr)
 		event, err := hub.ParseWebhook(provider, r, raw)
 		if err != nil {
 			logger.Warn("payment webhook rejected", "provider", provider, "error", err)
@@ -33,4 +36,25 @@ func Mount(r chi.Router, service *app.Service, hub *payments.Hub, logger *slog.L
 		}
 		w.WriteHeader(http.StatusOK)
 	})
+}
+
+func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(rw, r)
+			logger.Info("http request", "method", r.Method, "path", r.URL.Path, "status", rw.status, "remote_addr", r.RemoteAddr, "duration_ms", time.Since(start).Milliseconds())
+		})
+	}
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *responseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
 }

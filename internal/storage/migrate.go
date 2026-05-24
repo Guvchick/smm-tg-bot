@@ -93,6 +93,10 @@ on transactions(created_at desc);
 create index if not exists users_created_idx
 on users(created_at desc);
 
+create index if not exists services_category_name_idx
+on services(category, name)
+where enabled=true;
+
 create table if not exists promos (
 	code text primary key,
 	bonus_percent numeric(8,2) not null default 0,

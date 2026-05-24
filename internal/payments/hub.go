@@ -42,6 +42,15 @@ type WebhookEvent struct {
 	Raw         []byte
 }
 
+type InvoiceStatus struct {
+	ProviderID  string
+	LocalID     string
+	AmountCents int64
+	Currency    string
+	Status      string
+	Raw         []byte
+}
+
 type Hub struct {
 	cfg  config.Config
 	http *http.Client
@@ -200,6 +209,72 @@ func (h *Hub) ParseWebhook(provider string, r *http.Request, raw []byte) (Webhoo
 		return h.parseCryptoBot(r, raw)
 	default:
 		return WebhookEvent{}, fmt.Errorf("unknown webhook provider")
+	}
+}
+
+func (h *Hub) CheckInvoice(ctx context.Context, provider string, providerID string) (InvoiceStatus, error) {
+	if !h.cfg.PaymentEnabled(provider) {
+		return InvoiceStatus{}, fmt.Errorf("payment provider disabled")
+	}
+	switch provider {
+	case "cryptobot":
+		return h.checkCryptoBot(ctx, providerID)
+	default:
+		return InvoiceStatus{}, fmt.Errorf("manual check is not implemented for %s", provider)
+	}
+}
+
+func (h *Hub) checkCryptoBot(ctx context.Context, providerID string) (InvoiceStatus, error) {
+	values := url.Values{"invoice_ids": {providerID}, "count": {"1"}}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, h.cfg.CryptoBotBase+"/api/getInvoices", strings.NewReader(values.Encode()))
+	if err != nil {
+		return InvoiceStatus{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	httpReq.Header.Set("Crypto-Pay-API-Token", h.cfg.CryptoBotToken)
+	var res struct {
+		OK     bool            `json:"ok"`
+		Result json.RawMessage `json:"result"`
+		Error  string          `json:"error"`
+	}
+	if err := h.doJSON(httpReq, &res); err != nil {
+		return InvoiceStatus{}, err
+	}
+	if !res.OK {
+		return InvoiceStatus{}, fmt.Errorf("cryptobot: %s", res.Error)
+	}
+	type cryptoInvoiceDTO struct {
+		InvoiceID int64  `json:"invoice_id"`
+		Status    string `json:"status"`
+		Payload   string `json:"payload"`
+		Amount    string `json:"amount"`
+		Fiat      string `json:"fiat"`
+	}
+	var items []cryptoInvoiceDTO
+	if err := json.Unmarshal(res.Result, &items); err != nil || len(items) == 0 {
+		var wrapped struct {
+			Items []cryptoInvoiceDTO `json:"items"`
+		}
+		if err := json.Unmarshal(res.Result, &wrapped); err == nil {
+			items = append(items, wrapped.Items...)
+		}
+	}
+	if len(items) == 0 {
+		return InvoiceStatus{}, fmt.Errorf("cryptobot invoice not found")
+	}
+	item := items[0]
+	raw, _ := json.Marshal(item)
+	return InvoiceStatus{
+		ProviderID: fmt.Sprint(item.InvoiceID), LocalID: item.Payload,
+		AmountCents: parseMoneyCents(item.Amount), Currency: item.Fiat,
+		Status: paidStatus(item.Status, "paid"), Raw: raw,
+	}, nil
+}
+
+func EventFromInvoiceStatus(provider string, status InvoiceStatus) WebhookEvent {
+	return WebhookEvent{
+		Provider: provider, ProviderID: status.ProviderID, LocalID: status.LocalID,
+		AmountCents: status.AmountCents, Currency: status.Currency, Status: status.Status, Raw: status.Raw,
 	}
 }
 
