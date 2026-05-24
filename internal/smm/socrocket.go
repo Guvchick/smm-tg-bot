@@ -30,17 +30,18 @@ func NewClient(baseURL, key string) *Client {
 }
 
 type serviceDTO struct {
-	Category string `json:"category"`
-	Service  string `json:"service"`
-	Name     string `json:"name"`
-	Rate     string `json:"rate"`
-	Min      string `json:"min"`
-	Max      string `json:"max"`
-	Social   string `json:"soc"`
-	Type     string `json:"type"`
-	Refill   bool   `json:"refill"`
-	Cancel   bool   `json:"cancel"`
-	Error    string `json:"error"`
+	Category             string `json:"category"`
+	Service              string `json:"service"`
+	Name                 string `json:"name"`
+	Rate                 string `json:"rate"`
+	Min                  string `json:"min"`
+	Max                  string `json:"max"`
+	Social               string `json:"soc"`
+	Type                 string `json:"type"`
+	Refill               bool   `json:"refill"`
+	Cancel               bool   `json:"cancel"`
+	CancelingIsAvailable bool   `json:"canceling_is_available"`
+	Error                 string `json:"error"`
 }
 
 func (c *Client) Services(ctx context.Context) ([]domain.Service, error) {
@@ -60,7 +61,7 @@ func (c *Client) Services(ctx context.Context) ([]domain.Service, error) {
 		out = append(out, domain.Service{
 			ID: id, Name: item.Name, Category: item.Category, Rate: rate,
 			Min: minQty, Max: maxQty, Social: item.Social, Type: item.Type,
-			Refill: item.Refill, Cancel: item.Cancel, Enabled: true,
+			Refill: item.Refill, Cancel: item.Cancel || item.CancelingIsAvailable, Enabled: true,
 		})
 	}
 	return out, nil
@@ -153,6 +154,9 @@ func normalizeBaseURL(raw string) string {
 
 func looksHTML(body []byte, contentType string) bool {
 	trimmed := strings.TrimSpace(string(body))
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return false
+	}
 	return strings.Contains(strings.ToLower(contentType), "text/html") || strings.HasPrefix(trimmed, "<") || strings.HasPrefix(strings.ToLower(trimmed), "<!doctype")
 }
 
