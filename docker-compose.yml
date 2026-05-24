@@ -10,7 +10,7 @@ services:
     environment:
       POSTGRES_DB: smm_bot
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-15432}:5432"
     volumes:
@@ -63,7 +63,7 @@ services:
       timeout: 10s
       retries: 3
     logging: *default-logging
-    restart: unless-stopped
+    restart: on-failure:5
 
   caddy:
     profiles:
