@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strconv"
 	"strings"
 
@@ -83,6 +84,8 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		b.showTopup(msg.Chat.ID)
 	case i18n.T(u.Language, "info"):
 		b.showInfoMenu(msg.Chat.ID)
+	case i18n.T(u.Language, "support"):
+		b.showSupport(msg.Chat.ID)
 	case i18n.T(u.Language, "ref"):
 		b.reply(msg.Chat.ID, fmt.Sprintf("🤝 Ваша реферальная ссылка:\nhttps://t.me/%s?start=ref_%d", b.api.Self.UserName, u.TelegramID), nil)
 	case i18n.T(u.Language, "lang"):
@@ -251,11 +254,17 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		b.startMassOrder(ctx, msg.Chat.ID, cb.From.ID)
 	case data == "menu:topup":
 		b.editTopup(msg.Chat.ID, msg.MessageID)
+	case data == "menu:support":
+		b.editSupport(msg.Chat.ID, msg.MessageID)
+	case data == "menu:promo":
+		kb := profileKeyboard()
+		b.edit(msg.Chat.ID, msg.MessageID, "🎁 Введите промокод одним сообщением.", &kb)
+		_ = b.service.SaveDraft(ctx, cb.From.ID, app.OrderDraft{Mode: "promo", Step: "code"})
 	case data == "menu:info":
 		b.editInfoMenu(msg.Chat.ID, msg.MessageID)
 	case data == "menu:ref":
 		text := fmt.Sprintf("🤝 Ваша реферальная ссылка:\nhttps://t.me/%s?start=ref_%d", b.api.Self.UserName, u.TelegramID)
-		kb := backKeyboard()
+		kb := profileKeyboard()
 		b.edit(msg.Chat.ID, msg.MessageID, text, &kb)
 	case data == "menu:lang":
 		kb := langKeyboard()
@@ -284,7 +293,13 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		}
 	case strings.HasPrefix(data, "order:svc:"):
 		serviceID, _ := strconv.ParseInt(strings.TrimPrefix(data, "order:svc:"), 10, 64)
+		b.showServiceActions(ctx, msg.Chat.ID, msg.MessageID, serviceID)
+	case strings.HasPrefix(data, "order:single:"):
+		serviceID, _ := strconv.ParseInt(strings.TrimPrefix(data, "order:single:"), 10, 64)
 		b.selectService(ctx, msg.Chat.ID, msg.MessageID, cb.From.ID, serviceID)
+	case strings.HasPrefix(data, "order:masssvc:"):
+		serviceID, _ := strconv.ParseInt(strings.TrimPrefix(data, "order:masssvc:"), 10, 64)
+		b.selectMassService(ctx, msg.Chat.ID, msg.MessageID, cb.From.ID, serviceID)
 	case strings.HasPrefix(data, "lang:"):
 		lang := domain.Language(strings.TrimPrefix(data, "lang:"))
 		_ = b.service.Store.SetLanguage(ctx, cb.From.ID, lang)
@@ -314,12 +329,12 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 		txID := strings.TrimPrefix(data, "paycheck:")
 		tx, err := b.service.CheckPayment(ctx, txID, cb.From.ID)
 		if err != nil {
-			kb := backKeyboard()
+			kb := profileKeyboard()
 			b.edit(msg.Chat.ID, msg.MessageID, "Не удалось проверить оплату: "+esc(err.Error()), &kb)
 			return
 		}
 		text := fmt.Sprintf("💳 Оплата %s\nСтатус: %s\nСумма: %s", tx.Provider, humanPaymentStatus(tx.Status), storage.FormatMoney(tx.AmountCents))
-		kb := backKeyboard()
+		kb := profileKeyboard()
 		b.edit(msg.Chat.ID, msg.MessageID, text, &kb)
 	case data == "admin:stats":
 		if b.service.IsAdmin(cb.From.ID) {
@@ -332,6 +347,30 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	case data == "admin:payments":
 		if b.service.IsAdmin(cb.From.ID) {
 			b.editPayments(ctx, msg.Chat.ID, msg.MessageID)
+		}
+	case data == "admin:search":
+		if b.service.IsAdmin(cb.From.ID) {
+			kb := adminKeyboard()
+			b.edit(msg.Chat.ID, msg.MessageID, "🔎 Введите Telegram ID, внутренний ID или @username пользователя.", &kb)
+			_ = b.service.SaveDraft(ctx, cb.From.ID, app.OrderDraft{Mode: "admin_user_search"})
+		}
+	case data == "admin:promo":
+		if b.service.IsAdmin(cb.From.ID) {
+			kb := adminKeyboard()
+			b.edit(msg.Chat.ID, msg.MessageID, "🎁 Введите промокод:\n<code>CODE BONUS_PERCENT USES [MIN_RUB]</code>\n\nПример: <code>SALE10 10 100 50</code>", &kb)
+			_ = b.service.SaveDraft(ctx, cb.From.ID, app.OrderDraft{Mode: "admin_promo"})
+		}
+	case data == "admin:broadcast":
+		if b.service.IsAdmin(cb.From.ID) {
+			kb := adminKeyboard()
+			b.edit(msg.Chat.ID, msg.MessageID, "📣 Отправьте текст рассылки. HTML-разметка поддерживается.", &kb)
+			_ = b.service.SaveDraft(ctx, cb.From.ID, app.OrderDraft{Mode: "admin_broadcast"})
+		}
+	case data == "admin:restore":
+		if b.service.IsAdmin(cb.From.ID) {
+			kb := adminKeyboard()
+			b.edit(msg.Chat.ID, msg.MessageID, "♻️ Пришлите .sql или .zip файл бэкапа следующим сообщением.\n\nВажно: восстановление выполняется через psql в текущую БД.", &kb)
+			_ = b.service.SaveDraft(ctx, cb.From.ID, app.OrderDraft{Mode: "admin_restore"})
 		}
 	case data == "admin:sync":
 		if b.service.IsAdmin(cb.From.ID) {
@@ -353,6 +392,10 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 			kb := adminKeyboard()
 			b.edit(msg.Chat.ID, msg.MessageID, text, &kb)
 		}
+	case data == "support:ticket":
+		kb := supportKeyboard(b.service.Cfg.SupportURL, b.service.Cfg.SupportUsername)
+		b.edit(msg.Chat.ID, msg.MessageID, "✉️ Опишите вопрос одним сообщением. Я отправлю его администратору.", &kb)
+		_ = b.service.SaveDraft(ctx, cb.From.ID, app.OrderDraft{Mode: "support"})
 	}
 }
 
@@ -365,14 +408,24 @@ func (b *Bot) handleDraft(ctx context.Context, msg *tgbotapi.Message, u domain.U
 	case "single":
 		return b.handleSingleDraft(ctx, msg, u, draft)
 	case "mass":
-		lines, err := app.ParseMassLines(msg.Text)
+		var lines []app.MassOrderLine
+		var err error
+		if draft.ServiceID != 0 {
+			lines, err = app.ParseMassLinesForService(draft.ServiceID, msg.Text)
+		} else {
+			lines, err = app.ParseMassLines(msg.Text)
+		}
 		if err != nil {
-			b.reply(msg.Chat.ID, "Формат строки: SERVICE_ID LINK QUANTITY\nМожно несколько строк.", nil)
+			if draft.ServiceID != 0 {
+				b.reply(msg.Chat.ID, "Формат строки: LINK QUANTITY\nМожно несколько строк.", nil)
+			} else {
+				b.reply(msg.Chat.ID, "Формат строки: SERVICE_ID LINK QUANTITY\nМожно несколько строк.", nil)
+			}
 			return true
 		}
 		orders, errs := b.service.SubmitMassOrder(ctx, u, lines)
 		b.service.ClearDraft(ctx, msg.From.ID)
-		b.reply(msg.Chat.ID, fmt.Sprintf("📦 Массовый заказ: создано %d\nОшибки: %s", len(orders), strings.Join(errs, "; ")), nil)
+		b.reply(msg.Chat.ID, massOrderResultText(orders, errs), nil)
 		return true
 	case "topup":
 		amount, err := strconv.ParseFloat(strings.ReplaceAll(msg.Text, ",", "."), 64)
@@ -392,9 +445,90 @@ func (b *Bot) handleDraft(ctx context.Context, msg *tgbotapi.Message, u domain.U
 		if tx.Provider == "cryptobot" {
 			rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🔎 Проверить оплату", "paycheck:"+tx.ID)))
 		}
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Меню", "menu:main")))
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Профиль", "menu:profile")))
 		kb := tgbotapi.NewInlineKeyboardMarkup(rows...)
-		b.reply(msg.Chat.ID, "Счет создан. После оплаты баланс пополнится автоматически через webhook.", kb)
+		b.reply(msg.Chat.ID, depositText(tx), kb)
+		return true
+	case "promo":
+		code := strings.TrimSpace(msg.Text)
+		b.service.ClearDraft(ctx, msg.From.ID)
+		if code == "" {
+			b.reply(msg.Chat.ID, "Промокод пустой.", nil)
+			return true
+		}
+		if err := b.service.SetPendingPromo(ctx, u.ID, code); err != nil {
+			b.reply(msg.Chat.ID, "Ошибка: "+esc(err.Error()), nil)
+			return true
+		}
+		b.reply(msg.Chat.ID, "🎁 Промокод применится к следующему успешному пополнению.", profileKeyboard())
+		return true
+	case "support":
+		text := strings.TrimSpace(msg.Text)
+		b.service.ClearDraft(ctx, msg.From.ID)
+		if text == "" {
+			b.reply(msg.Chat.ID, "Сообщение пустое.", nil)
+			return true
+		}
+		ticketID, err := b.service.Store.CreateSupportTicket(ctx, u.ID, text)
+		if err != nil {
+			b.reply(msg.Chat.ID, "Не удалось отправить обращение: "+esc(err.Error()), nil)
+			return true
+		}
+		b.service.NotifyAdminsTopic("support", fmt.Sprintf("🆘 <b>Обращение #%d</b>\n\n👤 Пользователь: %s\n\n%s", ticketID, userLine(u), esc(text)))
+		b.reply(msg.Chat.ID, fmt.Sprintf("✅ Обращение #%d отправлено в поддержку.", ticketID), supportKeyboard(b.service.Cfg.SupportURL, b.service.Cfg.SupportUsername))
+		return true
+	case "admin_user_search":
+		b.service.ClearDraft(ctx, msg.From.ID)
+		if !b.service.IsAdmin(msg.From.ID) {
+			return true
+		}
+		b.reply(msg.Chat.ID, b.userSearchText(ctx, msg.Text), adminKeyboard())
+		return true
+	case "admin_promo":
+		b.service.ClearDraft(ctx, msg.From.ID)
+		if !b.service.IsAdmin(msg.From.ID) {
+			return true
+		}
+		text := b.createPromoFromText(ctx, msg.Text)
+		b.reply(msg.Chat.ID, text, adminKeyboard())
+		return true
+	case "admin_broadcast":
+		b.service.ClearDraft(ctx, msg.From.ID)
+		if !b.service.IsAdmin(msg.From.ID) {
+			return true
+		}
+		n, err := b.service.Broadcast(ctx, msg.From.ID, msg.Text)
+		if err != nil {
+			b.reply(msg.Chat.ID, "Ошибка рассылки: "+esc(err.Error()), adminKeyboard())
+			return true
+		}
+		b.reply(msg.Chat.ID, fmt.Sprintf("📣 Рассылка отправлена: %d", n), adminKeyboard())
+		return true
+	case "admin_restore":
+		if !b.service.IsAdmin(msg.From.ID) {
+			return true
+		}
+		if msg.Document == nil {
+			b.reply(msg.Chat.ID, "Пришлите файл .sql или .zip.", adminKeyboard())
+			return true
+		}
+		b.service.ClearDraft(ctx, msg.From.ID)
+		fileURL, err := b.api.GetFileDirectURL(msg.Document.FileID)
+		if err != nil {
+			b.reply(msg.Chat.ID, "Не удалось получить файл: "+esc(err.Error()), adminKeyboard())
+			return true
+		}
+		path, err := b.service.DownloadTelegramFile(ctx, fileURL, msg.Document.FileName)
+		if err != nil {
+			b.reply(msg.Chat.ID, "Не удалось скачать файл: "+esc(err.Error()), adminKeyboard())
+			return true
+		}
+		defer func() { _ = removeFile(path) }()
+		if err := b.service.RestoreBackup(ctx, path); err != nil {
+			b.reply(msg.Chat.ID, "Ошибка восстановления: "+esc(err.Error()), adminKeyboard())
+			return true
+		}
+		b.reply(msg.Chat.ID, "♻️ Бэкап восстановлен.", adminKeyboard())
 		return true
 	default:
 		b.service.ClearDraft(ctx, msg.From.ID)
@@ -431,7 +565,7 @@ func (b *Bot) handleSingleDraft(ctx context.Context, msg *tgbotapi.Message, u do
 			b.reply(msg.Chat.ID, "Не удалось создать заказ: "+err.Error(), nil)
 			return true
 		}
-		b.reply(msg.Chat.ID, fmt.Sprintf("✅ Заказ #%d создан\nSocRocket: %s", order.ID, order.SocOrderID), nil)
+		b.reply(msg.Chat.ID, orderCreatedText(order), nil)
 	}
 	return true
 }
@@ -495,23 +629,28 @@ func (b *Bot) profileView(ctx context.Context, u domain.User) (string, tgbotapi.
 	orders, _ := b.service.Store.ListUserOrders(ctx, u.ID, 5)
 	txs, _ := b.service.Store.UserTransactions(ctx, u.ID, 5)
 	waiting, _ := b.service.Store.UserWaitingTransactions(ctx, u.ID, 5)
+	stats, _ := b.service.Store.UserStats(ctx, u.ID)
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("👤 <b>Профиль</b>\nID: %d\nБаланс: %s\nБонусы: %s\n\n", u.TelegramID, storage.FormatMoney(u.BalanceCents), storage.FormatMoney(u.BonusCents)))
-	sb.WriteString("🧾 Последние заказы:\n")
+	sb.WriteString(fmt.Sprintf("👤 <b>Профиль</b>\n\nID: <code>%d</code>\nБаланс: <b>%s</b>\nБонусы: <b>%s</b>\n\n", u.TelegramID, storage.FormatMoney(u.BalanceCents), storage.FormatMoney(u.BonusCents)))
+	sb.WriteString(fmt.Sprintf("📈 <b>Статистика</b>\nПополнено: %s\nПотрачено на заказы: %s\nЗаказов: %d\nРефералов: %d\n\n", storage.FormatMoney(stats["paid_cents"]), storage.FormatMoney(stats["spent_cents"]), stats["orders"], stats["referrals"]))
+	sb.WriteString("🧾 <b>Последние заказы</b>\n")
 	if len(orders) == 0 {
 		sb.WriteString("пока нет\n")
 	}
 	for _, o := range orders {
-		sb.WriteString(fmt.Sprintf("#%d %s %s\n", o.ID, o.Status, storage.FormatMoney(o.ChargeCents)))
+		sb.WriteString(fmt.Sprintf("#%d · %s · %s · услуга <code>%d</code>\n", o.ID, humanOrderStatus(o.Status), storage.FormatMoney(o.ChargeCents), o.ServiceID))
 	}
-	sb.WriteString("\n💳 Транзакции:\n")
+	sb.WriteString("\n💳 <b>Пополнения</b>\n")
 	if len(txs) == 0 {
 		sb.WriteString("пока нет\n")
 	}
 	for _, tx := range txs {
-		sb.WriteString(fmt.Sprintf("%s %s %s\n", tx.Provider, tx.Status, storage.FormatMoney(tx.AmountCents)))
+		sb.WriteString(fmt.Sprintf("%s · %s · %s\n", providerName(tx.Provider), humanPaymentStatus(tx.Status), storage.FormatMoney(tx.AmountCents)))
 	}
-	var rows [][]tgbotapi.InlineKeyboardButton
+	rows := [][]tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("💳 Пополнить", "menu:topup"), tgbotapi.NewInlineKeyboardButtonData("🤝 Рефералы", "menu:ref")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🎁 Промокод", "menu:promo")),
+	}
 	for _, tx := range waiting {
 		if tx.Provider == "cryptobot" && tx.ProviderID != "" {
 			rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🔎 Проверить CryptoBot "+storage.FormatMoney(tx.AmountCents), "paycheck:"+tx.ID)))
@@ -546,6 +685,16 @@ func (b *Bot) editTopup(chatID int64, messageID int) {
 		return
 	}
 	b.edit(chatID, messageID, "Выберите платежную систему:", &kb)
+}
+
+func (b *Bot) showSupport(chatID int64) {
+	kb := supportKeyboard(b.service.Cfg.SupportURL, b.service.Cfg.SupportUsername)
+	b.reply(chatID, supportText(b.service.Cfg.SupportText), kb)
+}
+
+func (b *Bot) editSupport(chatID int64, messageID int) {
+	kb := supportKeyboard(b.service.Cfg.SupportURL, b.service.Cfg.SupportUsername)
+	b.edit(chatID, messageID, supportText(b.service.Cfg.SupportText), &kb)
 }
 
 func (b *Bot) showInfoMenu(chatID int64) {
@@ -583,7 +732,12 @@ func (b *Bot) statsText(ctx context.Context) string {
 	if err != nil {
 		return "Ошибка статистики: " + esc(err.Error())
 	}
-	return fmt.Sprintf("📊 Статистика\nПользователи: %d\nЗаказы: %d\nОплат: %d\nОборот: %s", stats["users"], stats["orders"], stats["paid_transactions"], storage.FormatMoney(stats["revenue_cents"]))
+	return fmt.Sprintf(
+		"📊 <b>Статистика</b>\n\n👥 Пользователи: <b>%d</b> (+%d за 24ч)\n🧩 Услуги: <b>%d</b> / активных <b>%d</b>\n\n🛒 Заказы: <b>%d</b> (+%d за 24ч)\n💸 Потрачено на заказы: <b>%s</b>\n\n💳 Успешных пополнений: <b>%d</b>\n💵 Оплачено пользователями: <b>%s</b>\n⏳ Ожидают оплаты: <b>%d</b>\n❌ Не оплачено/ошибка: <b>%d</b>\n\n💰 Балансы пользователей: <b>%s</b>\n🎁 Бонусные балансы: <b>%s</b>",
+		stats["users"], stats["users_today"], stats["services"], stats["enabled_services"], stats["orders"], stats["orders_today"],
+		storage.FormatMoney(stats["revenue_cents"]), stats["paid_transactions"], storage.FormatMoney(stats["paid_cents"]),
+		stats["pending_transactions"], stats["failed_transactions"], storage.FormatMoney(stats["balances_cents"]), storage.FormatMoney(stats["bonuses_cents"]),
+	)
 }
 
 func (b *Bot) showUsers(ctx context.Context, chatID int64) {
@@ -602,9 +756,9 @@ func (b *Bot) usersText(ctx context.Context) string {
 		return "Ошибка: " + esc(err.Error())
 	}
 	var sb strings.Builder
-	sb.WriteString("👥 Последние пользователи:\n")
+	sb.WriteString("👥 <b>Последние пользователи</b>\n\n")
 	for _, u := range users {
-		sb.WriteString(fmt.Sprintf("%d @%s %s баланс %s\n", u.TelegramID, u.Username, u.FirstName, storage.FormatMoney(u.BalanceCents)))
+		sb.WriteString(fmt.Sprintf("%s\nБаланс: <b>%s</b> · бонусы: %s · реф: <code>%s</code>\n\n", userLine(u), storage.FormatMoney(u.BalanceCents), storage.FormatMoney(u.BonusCents), esc(u.ReferralCode)))
 	}
 	return sb.String()
 }
@@ -621,14 +775,14 @@ func (b *Bot) editPayments(ctx context.Context, chatID int64, messageID int) {
 }
 
 func (b *Bot) paymentsText(ctx context.Context) string {
-	txs, err := b.service.Store.LatestTransactions(ctx, 15)
+	txs, err := b.service.Store.LatestTransactionViews(ctx, 15)
 	if err != nil {
 		return "Ошибка: " + esc(err.Error())
 	}
 	var sb strings.Builder
-	sb.WriteString("💳 Последние оплаты:\n")
+	sb.WriteString("💳 <b>Последние пополнения</b>\n\n")
 	for _, tx := range txs {
-		sb.WriteString(fmt.Sprintf("%s %s user:%d %s\n", tx.Provider, tx.Status, tx.UserID, storage.FormatMoney(tx.AmountCents)))
+		sb.WriteString(fmt.Sprintf("%s · %s · <b>%s</b>\n👤 %s\nID: <code>%s</code> · Provider ID: <code>%s</code>\n\n", providerName(tx.Provider), humanPaymentStatus(tx.Status), storage.FormatMoney(tx.AmountCents), userLine(domain.User{TelegramID: tx.TelegramID, Username: tx.Username, FirstName: tx.FirstName}), esc(tx.ID), esc(tx.ProviderID)))
 	}
 	return sb.String()
 }
@@ -715,7 +869,8 @@ func (b *Bot) categoryServicesView(ctx context.Context, catPage, catIndex, svcPa
 	total, _ := b.service.Store.CountServicesByCategory(ctx, category)
 	var rows [][]tgbotapi.InlineKeyboardButton
 	for _, svc := range services {
-		label := fmt.Sprintf("▫️ %s | %d-%d", short(svc.Name, 38), svc.Min, svc.Max)
+		price, _ := b.service.PriceCents(ctx, svc.ID, svc.Min)
+		label := fmt.Sprintf("▫️ %s | %d-%d | от %s", short(svc.Name, 30), svc.Min, svc.Max, storage.FormatMoney(price))
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(label, fmt.Sprintf("order:svc:%d", svc.ID))))
 	}
 	var nav []tgbotapi.InlineKeyboardButton
@@ -742,6 +897,43 @@ func (b *Bot) selectService(ctx context.Context, chatID int64, messageID int, tg
 	_ = b.service.SaveDraft(ctx, tgID, app.OrderDraft{Mode: "single", Step: "link", ServiceID: serviceID, Extras: map[string]string{}})
 	kb := backKeyboard()
 	text := fmt.Sprintf("🛒 <b>%s</b>\nID: %d\nМин: %d\nМакс: %d\n\nОтправьте ссылку для заказа.", esc(svc.Name), svc.ID, svc.Min, svc.Max)
+	b.edit(chatID, messageID, text, &kb)
+}
+
+func (b *Bot) showServiceActions(ctx context.Context, chatID int64, messageID int, serviceID int64) {
+	svc, err := b.service.Store.GetService(ctx, serviceID)
+	if err != nil {
+		kb := backKeyboard()
+		b.edit(chatID, messageID, "Услуга не найдена: "+esc(err.Error()), &kb)
+		return
+	}
+	priceMin, _ := b.service.PriceCents(ctx, serviceID, svc.Min)
+	priceMax, _ := b.service.PriceCents(ctx, serviceID, svc.Max)
+	rows := [][]tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🛒 Обычный заказ", fmt.Sprintf("order:single:%d", serviceID)),
+			tgbotapi.NewInlineKeyboardButtonData("📦 Массовый заказ", fmt.Sprintf("order:masssvc:%d", serviceID)),
+		),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Категории", "menu:order")),
+	}
+	kb := tgbotapi.NewInlineKeyboardMarkup(rows...)
+	text := fmt.Sprintf(
+		"🧩 <b>%s</b>\n\nID: <code>%d</code>\nКатегория: %s\nМин/макс: <b>%d-%d</b>\nЦена за минимум: <b>%s</b>\nЦена за максимум: <b>%s</b>\n\nВыберите тип заказа.",
+		esc(svc.Name), svc.ID, esc(svc.Category), svc.Min, svc.Max, storage.FormatMoney(priceMin), storage.FormatMoney(priceMax),
+	)
+	b.edit(chatID, messageID, text, &kb)
+}
+
+func (b *Bot) selectMassService(ctx context.Context, chatID int64, messageID int, tgID int64, serviceID int64) {
+	svc, err := b.service.Store.GetService(ctx, serviceID)
+	if err != nil {
+		kb := backKeyboard()
+		b.edit(chatID, messageID, "Услуга не найдена: "+esc(err.Error()), &kb)
+		return
+	}
+	_ = b.service.SaveDraft(ctx, tgID, app.OrderDraft{Mode: "mass", Step: "lines", ServiceID: serviceID})
+	kb := backKeyboard()
+	text := fmt.Sprintf("📦 <b>Массовый заказ</b>\n\nУслуга: <b>%s</b>\nID: <code>%d</code>\nМин/макс: <b>%d-%d</b>\n\nОтправьте строки:\n<code>LINK QUANTITY</code>\n\nПример:\n<code>https://example.com/post 100\nhttps://example.com/post2 250</code>", esc(svc.Name), svc.ID, svc.Min, svc.Max)
 	b.edit(chatID, messageID, text, &kb)
 }
 
@@ -779,14 +971,20 @@ func (b *Bot) requireAdmin(msg *tgbotapi.Message) bool {
 
 func mainKeyboard(lang domain.Language, admin bool) tgbotapi.InlineKeyboardMarkup {
 	rows := [][]tgbotapi.InlineKeyboardButton{
-		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "order"), "menu:order"), tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "mass_order"), "menu:mass")),
-		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "profile"), "menu:profile"), tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "topup"), "menu:topup")),
-		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "info"), "menu:info"), tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "ref"), "menu:ref"), tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "lang"), "menu:lang")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "order"), "menu:order")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "profile"), "menu:profile"), tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "support"), "menu:support")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "info"), "menu:info"), tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "lang"), "menu:lang")),
 	}
 	if admin {
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(i18n.T(lang, "admin"), "menu:admin")))
 	}
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+func profileKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("👤 Профиль", "menu:profile"), tgbotapi.NewInlineKeyboardButtonData("⬅️ Меню", "menu:main")),
+	)
 }
 
 func langKeyboard() tgbotapi.InlineKeyboardMarkup {
@@ -822,7 +1020,20 @@ func topupKeyboard(enabled func(string) bool) tgbotapi.InlineKeyboardMarkup {
 		}
 		rows = append(rows, buttons[i:end])
 	}
-	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Назад", "menu:main")))
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Профиль", "menu:profile")))
+	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+func supportKeyboard(supportURL, username string) tgbotapi.InlineKeyboardMarkup {
+	var rows [][]tgbotapi.InlineKeyboardButton
+	if supportURL != "" {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonURL("💬 Открыть поддержку", supportURL)))
+	}
+	if username != "" {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonURL("👤 @"+username, "https://t.me/"+username)))
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("✉️ Написать обращение", "support:ticket")))
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Меню", "menu:main")))
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
 }
 
@@ -838,8 +1049,10 @@ func infoKeyboard() tgbotapi.InlineKeyboardMarkup {
 func adminKeyboard() tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("📊 Статистика", "admin:stats"), tgbotapi.NewInlineKeyboardButtonData("👥 Юзеры", "admin:users")),
-		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("💳 Оплаты", "admin:payments"), tgbotapi.NewInlineKeyboardButtonData("🔄 Синхронизировать услуги", "admin:sync")),
-		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🗄 Бэкап", "admin:backup")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🔎 Поиск", "admin:search"), tgbotapi.NewInlineKeyboardButtonData("💳 Оплаты", "admin:payments")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🎁 Промокод", "admin:promo"), tgbotapi.NewInlineKeyboardButtonData("📣 Рассылка", "admin:broadcast")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🔄 Синхронизировать услуги", "admin:sync")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🗄 Отправить бэкап", "admin:backup"), tgbotapi.NewInlineKeyboardButtonData("♻️ Восстановить", "admin:restore")),
 		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Меню", "menu:main")),
 	)
 }
@@ -858,6 +1071,129 @@ func paymentsKeyboard(ctx context.Context, store *storage.Store) tgbotapi.Inline
 	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Админка", "menu:admin")))
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+func (b *Bot) userSearchText(ctx context.Context, query string) string {
+	users, err := b.service.Store.SearchUsers(ctx, query, 10)
+	if err != nil {
+		return "Ошибка поиска: " + esc(err.Error())
+	}
+	if len(users) == 0 {
+		return "🔎 Пользователи не найдены."
+	}
+	var sb strings.Builder
+	sb.WriteString("🔎 <b>Результаты поиска</b>\n\n")
+	for _, u := range users {
+		stats, _ := b.service.Store.UserStats(ctx, u.ID)
+		sb.WriteString(fmt.Sprintf("%s\nБаланс: <b>%s</b> · бонусы: %s\nПополнено: %s · потрачено: %s · заказов: %d\n\n", userLine(u), storage.FormatMoney(u.BalanceCents), storage.FormatMoney(u.BonusCents), storage.FormatMoney(stats["paid_cents"]), storage.FormatMoney(stats["spent_cents"]), stats["orders"]))
+	}
+	return sb.String()
+}
+
+func (b *Bot) createPromoFromText(ctx context.Context, text string) string {
+	parts := strings.Fields(text)
+	if len(parts) < 3 {
+		return "Формат: <code>CODE BONUS_PERCENT USES [MIN_RUB]</code>"
+	}
+	percent, err := strconv.ParseFloat(strings.ReplaceAll(parts[1], ",", "."), 64)
+	if err != nil {
+		return "Процент должен быть числом."
+	}
+	uses, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return "Количество использований должно быть числом."
+	}
+	var minCents int64
+	if len(parts) > 3 {
+		minRub, err := strconv.ParseFloat(strings.ReplaceAll(parts[3], ",", "."), 64)
+		if err != nil {
+			return "Минимальная сумма должна быть числом."
+		}
+		minCents = int64(minRub*100 + 0.5)
+	}
+	if err := b.service.Store.CreatePromo(ctx, parts[0], percent, 0, uses, minCents); err != nil {
+		return "Ошибка промокода: " + esc(err.Error())
+	}
+	return fmt.Sprintf("🎁 Промокод <code>%s</code> сохранен\nБонус: <b>%.2f%%</b>\nИспользований: <b>%d</b>\nМинимальное пополнение: <b>%s</b>", esc(strings.ToUpper(parts[0])), percent, uses, storage.FormatMoney(minCents))
+}
+
+func depositText(tx domain.Transaction) string {
+	return fmt.Sprintf("💳 <b>Счет создан</b>\n\nПровайдер: <b>%s</b>\nСумма: <b>%s</b>\nСтатус: %s\nID: <code>%s</code>\n\nПосле оплаты баланс пополнится автоматически. Если CryptoBot молчит, кнопка проверки ниже дожмет оплату вручную.", providerName(tx.Provider), storage.FormatMoney(tx.AmountCents), humanPaymentStatus(tx.Status), esc(tx.ID))
+}
+
+func orderCreatedText(order domain.Order) string {
+	return fmt.Sprintf("✅ <b>Заказ #%d создан</b>\n\nSocRocket: <code>%s</code>\nУслуга: <code>%d</code>\nКоличество: <b>%d</b>\nСписано: <b>%s</b>", order.ID, esc(order.SocOrderID), order.ServiceID, order.Quantity, storage.FormatMoney(order.ChargeCents))
+}
+
+func massOrderResultText(orders []domain.Order, errs []string) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("📦 <b>Массовый заказ</b>\n\nСоздано: <b>%d</b>\n", len(orders)))
+	var total int64
+	for _, order := range orders {
+		total += order.ChargeCents
+	}
+	sb.WriteString("Списано: <b>" + storage.FormatMoney(total) + "</b>\n")
+	if len(orders) > 0 {
+		sb.WriteString("\nЗаказы:\n")
+		for _, order := range orders {
+			sb.WriteString(fmt.Sprintf("#%d · %s\n", order.ID, storage.FormatMoney(order.ChargeCents)))
+		}
+	}
+	if len(errs) > 0 {
+		sb.WriteString("\nОшибки:\n" + esc(strings.Join(errs, "\n")))
+	}
+	return sb.String()
+}
+
+func supportText(text string) string {
+	return "🆘 <b>Поддержка</b>\n\n" + esc(text)
+}
+
+func userLine(u domain.User) string {
+	name := strings.TrimSpace(u.FirstName)
+	if u.Username != "" {
+		name = "@" + u.Username
+	}
+	if name == "" {
+		name = "user"
+	}
+	return fmt.Sprintf("%s (<code>%d</code>)", esc(name), u.TelegramID)
+}
+
+func providerName(provider string) string {
+	switch provider {
+	case "cryptobot":
+		return "🤖 CryptoBot"
+	case "platega":
+		return "💳 Platega"
+	case "pally":
+		return "💎 Pally"
+	case "heleket":
+		return "🪙 Heleket"
+	default:
+		return esc(provider)
+	}
+}
+
+func humanOrderStatus(status string) string {
+	switch status {
+	case "completed":
+		return "✅ выполнен"
+	case "canceled":
+		return "❌ отменен"
+	case "partial":
+		return "⚠️ частично"
+	case "in_progress":
+		return "🔄 в работе"
+	case "pending", "created":
+		return "⏳ ожидает"
+	default:
+		return "📊 " + esc(status)
+	}
+}
+
+func removeFile(path string) error {
+	return os.Remove(path)
 }
 
 func short(s string, max int) string {

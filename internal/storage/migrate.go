@@ -23,9 +23,13 @@ create table if not exists users (
 	referral_code text unique not null,
 	referred_by bigint references users(id),
 	is_blocked boolean not null default false,
+	welcome_bonus_claimed boolean not null default false,
 	created_at timestamptz not null default now(),
 	updated_at timestamptz not null default now()
 );
+
+alter table users add column if not exists welcome_bonus_claimed boolean not null default true;
+alter table users alter column welcome_bonus_claimed set default false;
 
 create table if not exists services (
 	id bigint primary key,
@@ -137,6 +141,17 @@ create table if not exists broadcasts (
 	sent_count bigint not null default 0,
 	created_at timestamptz not null default now()
 );
+
+create table if not exists support_tickets (
+	id bigserial primary key,
+	user_id bigint not null references users(id),
+	message text not null,
+	status text not null default 'open',
+	created_at timestamptz not null default now()
+);
+
+create index if not exists support_tickets_user_created_idx
+on support_tickets(user_id, created_at desc);
 
 insert into info_pages(lang, slug, title, body) values
 ('ru','rules','Правила сервиса','Здесь будут правила сервиса. Админ может изменить текст командой /setinfo ru rules Новый текст.'),

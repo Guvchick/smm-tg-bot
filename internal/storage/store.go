@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -28,6 +30,17 @@ on conflict(telegram_id) do update set username=excluded.username, first_name=ex
 returning id, telegram_id, username, first_name, language, balance_cents, bonus_cents, referral_code, referred_by, is_blocked, created_at
 `, tgID, username, firstName, lang, code, referredBy)
 	return scanUser(row)
+}
+
+func (s *Store) GrantWelcomeBonus(ctx context.Context, userID int64, cents int64) (bool, error) {
+	if cents <= 0 {
+		return false, nil
+	}
+	ct, err := s.db.Exec(ctx, `update users set balance_cents=balance_cents+$2, welcome_bonus_claimed=true, updated_at=now() where id=$1 and welcome_bonus_claimed=false`, userID, cents)
+	if err != nil {
+		return false, err
+	}
+	return ct.RowsAffected() > 0, nil
 }
 
 func (s *Store) GetUserByTelegram(ctx context.Context, tgID int64) (domain.User, error) {
@@ -80,7 +93,16 @@ on conflict(id) do update set name=excluded.name, category=excluded.category, ra
 }
 
 func (s *Store) ListServices(ctx context.Context, limit int) ([]domain.Service, error) {
-	rows, err := s.db.Query(ctx, `select id,name,category,rate,min_qty,max_qty,social,type,refill,cancel,coalesce(markup_percent,0),enabled from services where enabled=true order by category,name limit $1`, limit)
+	rows, err := s.db.Query(ctx, `
+select id,name,category,rate,min_qty,max_qty,social,type,refill,cancel,coalesce(markup_percent,0),enabled
+from (
+	select *, row_number() over(partition by category, lower(trim(name)), min_qty, max_qty, type order by rate asc, id asc) rn
+	from services
+	where enabled=true
+) s
+where rn=1
+order by category,name
+limit $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +142,16 @@ func (s *Store) CountCategories(ctx context.Context) (int, error) {
 }
 
 func (s *Store) ListServicesByCategory(ctx context.Context, category string, limit, offset int) ([]domain.Service, error) {
-	rows, err := s.db.Query(ctx, `select id,name,category,rate,min_qty,max_qty,social,type,refill,cancel,coalesce(markup_percent,0),enabled from services where enabled=true and category=$1 order by name limit $2 offset $3`, category, limit, offset)
+	rows, err := s.db.Query(ctx, `
+select id,name,category,rate,min_qty,max_qty,social,type,refill,cancel,coalesce(markup_percent,0),enabled
+from (
+	select *, row_number() over(partition by category, lower(trim(name)), min_qty, max_qty, type order by rate asc, id asc) rn
+	from services
+	where enabled=true and category=$1
+) s
+where rn=1
+order by name
+limit $2 offset $3`, category, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +169,13 @@ func (s *Store) ListServicesByCategory(ctx context.Context, category string, lim
 
 func (s *Store) CountServicesByCategory(ctx context.Context, category string) (int, error) {
 	var count int
-	err := s.db.QueryRow(ctx, `select count(*) from services where enabled=true and category=$1`, category).Scan(&count)
+	err := s.db.QueryRow(ctx, `
+select count(*) from (
+	select 1
+	from services
+	where enabled=true and category=$1
+	group by category, lower(trim(name)), min_qty, max_qty, type
+) s`, category).Scan(&count)
 	return count, err
 }
 
@@ -250,6 +287,26 @@ func (s *Store) UserWaitingTransactions(ctx context.Context, userID int64, limit
 	return out, rows.Err()
 }
 
+func (s *Store) WaitingTransactionsByProvider(ctx context.Context, provider string, limit int) ([]domain.Transaction, error) {
+	if limit < 1 {
+		limit = 50
+	}
+	rows, err := s.db.Query(ctx, `select id,user_id,provider,provider_id,amount_cents,currency,status,pay_url,created_at from transactions where provider=$1 and status in ('created','waiting','pending') and coalesce(provider_id,'')<>'' order by created_at asc limit $2`, provider, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Transaction
+	for rows.Next() {
+		var tx domain.Transaction
+		if err := rows.Scan(&tx.ID, &tx.UserID, &tx.Provider, &tx.ProviderID, &tx.AmountCents, &tx.Currency, &tx.Status, &tx.PayURL, &tx.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, tx)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) LatestTransactions(ctx context.Context, limit int) ([]domain.Transaction, error) {
 	if s.orm != nil {
 		models, err := s.orm.LatestTransactions(limit)
@@ -278,6 +335,76 @@ func (s *Store) LatestTransactions(ctx context.Context, limit int) ([]domain.Tra
 			return nil, err
 		}
 		out = append(out, tx)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) LatestTransactionViews(ctx context.Context, limit int) ([]domain.TransactionView, error) {
+	rows, err := s.db.Query(ctx, `
+select t.id,t.user_id,t.provider,t.provider_id,t.amount_cents,t.currency,t.status,t.pay_url,t.created_at,u.telegram_id,u.username,u.first_name
+from transactions t
+join users u on u.id=t.user_id
+order by t.created_at desc
+limit $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.TransactionView
+	for rows.Next() {
+		var tx domain.TransactionView
+		if err := rows.Scan(&tx.ID, &tx.UserID, &tx.Provider, &tx.ProviderID, &tx.AmountCents, &tx.Currency, &tx.Status, &tx.PayURL, &tx.CreatedAt, &tx.TelegramID, &tx.Username, &tx.FirstName); err != nil {
+			return nil, err
+		}
+		out = append(out, tx)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UserStats(ctx context.Context, userID int64) (map[string]int64, error) {
+	row := s.db.QueryRow(ctx, `
+select
+	(select count(*) from orders where user_id=$1),
+	(select coalesce(sum(charge_cents),0) from orders where user_id=$1),
+	(select count(*) from transactions where user_id=$1 and status='paid'),
+	(select coalesce(sum(amount_cents),0) from transactions where user_id=$1 and status='paid'),
+	(select count(*) from transactions where user_id=$1 and status in ('created','waiting','pending')),
+	(select count(*) from users where referred_by=$1)
+`)
+	var orders, spent, paidTxs, paid, pending, refs int64
+	if err := row.Scan(&orders, &spent, &paidTxs, &paid, &pending, &refs); err != nil {
+		return nil, err
+	}
+	return map[string]int64{
+		"orders": orders, "spent_cents": spent, "paid_transactions": paidTxs,
+		"paid_cents": paid, "pending_transactions": pending, "referrals": refs,
+	}, nil
+}
+
+func (s *Store) SearchUsers(ctx context.Context, query string, limit int) ([]domain.User, error) {
+	query = strings.TrimSpace(strings.TrimPrefix(query, "@"))
+	if limit < 1 {
+		limit = 10
+	}
+	var rows pgx.Rows
+	var err error
+	if id, parseErr := strconv.ParseInt(query, 10, 64); parseErr == nil {
+		rows, err = s.db.Query(ctx, `select id, telegram_id, username, first_name, language, balance_cents, bonus_cents, referral_code, referred_by, is_blocked, created_at from users where id=$1 or telegram_id=$1 order by created_at desc limit $2`, id, limit)
+	} else {
+		pattern := "%" + query + "%"
+		rows, err = s.db.Query(ctx, `select id, telegram_id, username, first_name, language, balance_cents, bonus_cents, referral_code, referred_by, is_blocked, created_at from users where username ilike $1 or first_name ilike $1 or referral_code ilike $1 order by created_at desc limit $2`, pattern, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
 	}
 	return out, rows.Err()
 }
@@ -341,15 +468,29 @@ func (s *Store) Stats(ctx context.Context) (map[string]int64, error) {
 	row := s.db.QueryRow(ctx, `
 select
 	(select count(*) from users),
+	(select count(*) from users where created_at >= now() - interval '1 day'),
 	(select count(*) from orders),
+	(select count(*) from orders where created_at >= now() - interval '1 day'),
 	(select coalesce(sum(charge_cents),0) from orders),
-	(select count(*) from transactions where status='paid')
+	(select count(*) from transactions where status='paid'),
+	(select coalesce(sum(amount_cents),0) from transactions where status='paid'),
+	(select count(*) from transactions where status in ('created','waiting','pending')),
+	(select count(*) from transactions where status='failed'),
+	(select coalesce(sum(balance_cents),0) from users),
+	(select coalesce(sum(bonus_cents),0) from users),
+	(select count(*) from services),
+	(select count(*) from services where enabled=true)
 `)
-	var users, orders, revenue, paid int64
-	if err := row.Scan(&users, &orders, &revenue, &paid); err != nil {
+	var users, usersToday, orders, ordersToday, revenue, paid, paidSum, pending, failed, balances, bonuses, services, enabledServices int64
+	if err := row.Scan(&users, &usersToday, &orders, &ordersToday, &revenue, &paid, &paidSum, &pending, &failed, &balances, &bonuses, &services, &enabledServices); err != nil {
 		return nil, err
 	}
-	return map[string]int64{"users": users, "orders": orders, "revenue_cents": revenue, "paid_transactions": paid}, nil
+	return map[string]int64{
+		"users": users, "users_today": usersToday, "orders": orders, "orders_today": ordersToday,
+		"revenue_cents": revenue, "paid_transactions": paid, "paid_cents": paidSum,
+		"pending_transactions": pending, "failed_transactions": failed, "balances_cents": balances,
+		"bonuses_cents": bonuses, "services": services, "enabled_services": enabledServices,
+	}, nil
 }
 
 func (s *Store) AllUserTelegramIDs(ctx context.Context) ([]int64, error) {
@@ -398,6 +539,12 @@ values(upper($1),$2,$3,$4,$5)
 on conflict(code) do update set bonus_percent=excluded.bonus_percent, bonus_cents=excluded.bonus_cents, uses_left=excluded.uses_left, min_deposit_cents=excluded.min_deposit_cents
 `, code, bonusPercent, bonusCents, usesLeft, minDepositCents)
 	return err
+}
+
+func (s *Store) CreateSupportTicket(ctx context.Context, userID int64, message string) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(ctx, `insert into support_tickets(user_id,message) values($1,$2) returning id`, userID, message).Scan(&id)
+	return id, err
 }
 
 func (s *Store) ReferralParent(ctx context.Context, userID int64) (domain.User, error) {

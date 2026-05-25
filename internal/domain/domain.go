@@ -67,6 +67,13 @@ type Transaction struct {
 	CreatedAt   time.Time
 }
 
+type TransactionView struct {
+	Transaction
+	TelegramID int64
+	Username   string
+	FirstName  string
+}
+
 type Promo struct {
 	Code             string
 	BonusPercent     float64

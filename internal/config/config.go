@@ -9,86 +9,120 @@ import (
 )
 
 type Config struct {
-	AppEnv          string
-	LogLevel        string
-	HTTPAddr       string
-	PublicBaseURL  string
-	TelegramToken  string
-	AdminIDs       map[int64]bool
-	AdminGroupID   int64
-	BackupGroupID  int64
-	DatabaseURL    string
-	PostgresMaxConns int32
-	PostgresMinConns int32
-	RedisAddr      string
-	RedisPassword  string
-	RedisDB        int
-	SocRocketAPIURL string
-	SocRocketAPIKey string
-	DefaultMarkup   float64
-	PlategaEnabled  bool
-	PlategaMerchant string
-	PlategaSecret   string
-	PlategaAPIURL   string
-	PallyEnabled    bool
-	PallyToken      string
-	PallyShopID     string
-	PallyWebhookSecret string
-	PallyAPIURL     string
-	HeleketEnabled  bool
-	HeleketPayKey   string
-	HeleketMerchant string
-	HeleketAPIURL   string
-	CryptoBotEnabled bool
-	CryptoBotToken  string
-	CryptoBotBase   string
-	ReferralPercent float64
-	OrderSyncEnabled bool
-	OrderSyncEvery  time.Duration
-	BackupEnabled   bool
-	BackupEvery     time.Duration
+	AppEnv                      string
+	LogLevel                    string
+	HTTPAddr                    string
+	PublicBaseURL               string
+	TelegramToken               string
+	AdminIDs                    map[int64]bool
+	AdminGroupID                int64
+	BackupGroupID               int64
+	AdminTopicGeneralID         int
+	AdminTopicOrdersID          int
+	AdminTopicPaymentsID        int
+	AdminTopicBackupsID         int
+	AdminTopicSupportID         int
+	SupportText                 string
+	SupportURL                  string
+	SupportUsername             string
+	NewUserBonusCents           int64
+	DatabaseURL                 string
+	PostgresMaxConns            int32
+	PostgresMinConns            int32
+	RedisAddr                   string
+	RedisPassword               string
+	RedisDB                     int
+	SocRocketAPIURL             string
+	SocRocketAPIKey             string
+	DefaultMarkup               float64
+	PlategaEnabled              bool
+	PlategaMerchant             string
+	PlategaSecret               string
+	PlategaAPIURL               string
+	PallyEnabled                bool
+	PallyToken                  string
+	PallyShopID                 string
+	PallyWebhookSecret          string
+	PallyAPIURL                 string
+	HeleketEnabled              bool
+	HeleketPayKey               string
+	HeleketMerchant             string
+	HeleketAPIURL               string
+	CryptoBotEnabled            bool
+	CryptoBotToken              string
+	CryptoBotBase               string
+	ReferralPercent             float64
+	PaymentPollEnabled          bool
+	PaymentPollEvery            time.Duration
+	OrderSyncEnabled            bool
+	OrderSyncEvery              time.Duration
+	BackupEnabled               bool
+	BackupEvery                 time.Duration
+	GoogleSheetsEnabled         bool
+	GoogleSheetsSpreadsheetID   string
+	GoogleSheetsCredentialsFile string
+	GoogleSheetsCredentialsJSON string
+	GoogleSheetsOrdersSheet     string
+	GoogleSheetsDepositsSheet   string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		AppEnv:          env("APP_ENV", "dev"),
-		LogLevel:        env("LOG_LEVEL", "info"),
-		HTTPAddr:       env("HTTP_ADDR", ":8080"),
-		PublicBaseURL:  strings.TrimRight(env("PUBLIC_BASE_URL", "http://localhost:8080"), "/"),
-		TelegramToken:  os.Getenv("TELEGRAM_BOT_TOKEN"),
-		AdminIDs:       parseIDs(os.Getenv("ADMIN_IDS")),
-		AdminGroupID:   parseInt64(os.Getenv("ADMIN_GROUP_ID")),
-		BackupGroupID:  parseInt64(os.Getenv("BACKUP_GROUP_ID")),
-		DatabaseURL:    os.Getenv("DATABASE_URL"),
-		PostgresMaxConns: int32(parseInt64(env("POSTGRES_MAX_CONNS", "5"))),
-		PostgresMinConns: int32(parseInt64(env("POSTGRES_MIN_CONNS", "0"))),
-		RedisAddr:      env("REDIS_ADDR", "localhost:6379"),
-		RedisPassword:  os.Getenv("REDIS_PASSWORD"),
-		RedisDB:        int(parseInt64(env("REDIS_DB", "0"))),
-		SocRocketAPIURL: env("SOC_ROCKET_API_URL", "https://soc-rocket.ru/api/v2/"),
-		SocRocketAPIKey: os.Getenv("SOC_ROCKET_API_KEY"),
-		DefaultMarkup:   parseFloat(env("DEFAULT_MARKUP_PERCENT", "25")),
-		PlategaEnabled:  parseBool(env("PLATEGA_ENABLED", "true")),
-		PlategaMerchant: os.Getenv("PLATEGA_MERCHANT_ID"),
-		PlategaSecret:   os.Getenv("PLATEGA_SECRET"),
-		PlategaAPIURL:   env("PLATEGA_API_URL", "https://app.platega.io/api/v1/transaction/process"),
-		PallyEnabled:    parseBool(env("PALLY_ENABLED", "true")),
-		PallyToken:      os.Getenv("PALLY_TOKEN"),
-		PallyShopID:     os.Getenv("PALLY_SHOP_ID"),
-		PallyWebhookSecret: env("PALLY_WEBHOOK_SECRET", os.Getenv("PALLY_TOKEN")),
-		PallyAPIURL:     env("PALLY_API_URL", "https://pal24.pro/api/v1/bill/create"),
-		HeleketEnabled:  parseBool(env("HELEKET_ENABLED", "true")),
-		HeleketPayKey:   os.Getenv("HELEKET_PAYMENT_KEY"),
-		HeleketMerchant: os.Getenv("HELEKET_MERCHANT_ID"),
-		HeleketAPIURL:   env("HELEKET_API_URL", "https://api.heleket.com/v1/payment"),
-		CryptoBotEnabled: parseBool(env("CRYPTOBOT_ENABLED", "true")),
-		CryptoBotToken:  os.Getenv("CRYPTOBOT_TOKEN"),
-		CryptoBotBase:   strings.TrimRight(env("CRYPTOBOT_BASE_URL", "https://pay.crypt.bot"), "/"),
-		ReferralPercent: parseFloat(env("REFERRAL_PERCENT", "5")),
-		OrderSyncEnabled: parseBool(env("ORDER_SYNC_ENABLED", "true")),
-		OrderSyncEvery:  parseDuration(env("ORDER_SYNC_INTERVAL", "5m")),
-		BackupEnabled:   parseBool(env("BACKUP_ENABLED", "true")),
-		BackupEvery:     parseDuration(env("BACKUP_INTERVAL", "24h")),
+		AppEnv:                      env("APP_ENV", "dev"),
+		LogLevel:                    env("LOG_LEVEL", "info"),
+		HTTPAddr:                    env("HTTP_ADDR", ":8080"),
+		PublicBaseURL:               strings.TrimRight(env("PUBLIC_BASE_URL", "http://localhost:8080"), "/"),
+		TelegramToken:               os.Getenv("TELEGRAM_BOT_TOKEN"),
+		AdminIDs:                    parseIDs(os.Getenv("ADMIN_IDS")),
+		AdminGroupID:                parseInt64(os.Getenv("ADMIN_GROUP_ID")),
+		BackupGroupID:               parseInt64(os.Getenv("BACKUP_GROUP_ID")),
+		AdminTopicGeneralID:         int(parseInt64(os.Getenv("ADMIN_TOPIC_GENERAL_ID"))),
+		AdminTopicOrdersID:          int(parseInt64(os.Getenv("ADMIN_TOPIC_ORDERS_ID"))),
+		AdminTopicPaymentsID:        int(parseInt64(os.Getenv("ADMIN_TOPIC_PAYMENTS_ID"))),
+		AdminTopicBackupsID:         int(parseInt64(os.Getenv("ADMIN_TOPIC_BACKUPS_ID"))),
+		AdminTopicSupportID:         int(parseInt64(os.Getenv("ADMIN_TOPIC_SUPPORT_ID"))),
+		SupportText:                 env("SUPPORT_TEXT", "Напишите обращение, и администратор ответит вам как можно быстрее."),
+		SupportURL:                  os.Getenv("SUPPORT_URL"),
+		SupportUsername:             strings.TrimPrefix(os.Getenv("SUPPORT_USERNAME"), "@"),
+		NewUserBonusCents:           int64(parseFloat(env("NEW_USER_BONUS_RUB", "10"))*100 + 0.5),
+		DatabaseURL:                 os.Getenv("DATABASE_URL"),
+		PostgresMaxConns:            int32(parseInt64(env("POSTGRES_MAX_CONNS", "5"))),
+		PostgresMinConns:            int32(parseInt64(env("POSTGRES_MIN_CONNS", "0"))),
+		RedisAddr:                   env("REDIS_ADDR", "localhost:6379"),
+		RedisPassword:               os.Getenv("REDIS_PASSWORD"),
+		RedisDB:                     int(parseInt64(env("REDIS_DB", "0"))),
+		SocRocketAPIURL:             env("SOC_ROCKET_API_URL", "https://soc-rocket.ru/api/v2/"),
+		SocRocketAPIKey:             os.Getenv("SOC_ROCKET_API_KEY"),
+		DefaultMarkup:               parseFloat(env("DEFAULT_MARKUP_PERCENT", "25")),
+		PlategaEnabled:              parseBool(env("PLATEGA_ENABLED", "true")),
+		PlategaMerchant:             os.Getenv("PLATEGA_MERCHANT_ID"),
+		PlategaSecret:               os.Getenv("PLATEGA_SECRET"),
+		PlategaAPIURL:               env("PLATEGA_API_URL", "https://app.platega.io/api/v1/transaction/process"),
+		PallyEnabled:                parseBool(env("PALLY_ENABLED", "true")),
+		PallyToken:                  os.Getenv("PALLY_TOKEN"),
+		PallyShopID:                 os.Getenv("PALLY_SHOP_ID"),
+		PallyWebhookSecret:          env("PALLY_WEBHOOK_SECRET", os.Getenv("PALLY_TOKEN")),
+		PallyAPIURL:                 env("PALLY_API_URL", "https://pal24.pro/api/v1/bill/create"),
+		HeleketEnabled:              parseBool(env("HELEKET_ENABLED", "true")),
+		HeleketPayKey:               os.Getenv("HELEKET_PAYMENT_KEY"),
+		HeleketMerchant:             os.Getenv("HELEKET_MERCHANT_ID"),
+		HeleketAPIURL:               env("HELEKET_API_URL", "https://api.heleket.com/v1/payment"),
+		CryptoBotEnabled:            parseBool(env("CRYPTOBOT_ENABLED", "true")),
+		CryptoBotToken:              os.Getenv("CRYPTOBOT_TOKEN"),
+		CryptoBotBase:               strings.TrimRight(env("CRYPTOBOT_BASE_URL", "https://pay.crypt.bot"), "/"),
+		ReferralPercent:             parseFloat(env("REFERRAL_PERCENT", "5")),
+		PaymentPollEnabled:          parseBool(env("PAYMENT_POLL_ENABLED", "true")),
+		PaymentPollEvery:            parseDuration(env("PAYMENT_POLL_INTERVAL", "30s")),
+		OrderSyncEnabled:            parseBool(env("ORDER_SYNC_ENABLED", "true")),
+		OrderSyncEvery:              parseDuration(env("ORDER_SYNC_INTERVAL", "5m")),
+		BackupEnabled:               parseBool(env("BACKUP_ENABLED", "true")),
+		BackupEvery:                 parseDuration(env("BACKUP_INTERVAL", "24h")),
+		GoogleSheetsEnabled:         parseBool(env("GOOGLE_SHEETS_ENABLED", "false")),
+		GoogleSheetsSpreadsheetID:   os.Getenv("GOOGLE_SHEETS_SPREADSHEET_ID"),
+		GoogleSheetsCredentialsFile: os.Getenv("GOOGLE_SHEETS_CREDENTIALS_FILE"),
+		GoogleSheetsCredentialsJSON: os.Getenv("GOOGLE_SHEETS_CREDENTIALS_JSON"),
+		GoogleSheetsOrdersSheet:     env("GOOGLE_SHEETS_ORDERS_SHEET", "orders"),
+		GoogleSheetsDepositsSheet:   env("GOOGLE_SHEETS_DEPOSITS_SHEET", "deposits"),
 	}
 	if cfg.TelegramToken == "" {
 		return cfg, errors.New("TELEGRAM_BOT_TOKEN is required")
@@ -98,6 +132,17 @@ func Load() (Config, error) {
 	}
 	if cfg.SocRocketAPIKey == "" {
 		return cfg, errors.New("SOC_ROCKET_API_KEY is required")
+	}
+	if cfg.GoogleSheetsEnabled {
+		if cfg.GoogleSheetsSpreadsheetID == "" {
+			return cfg, errors.New("GOOGLE_SHEETS_SPREADSHEET_ID is required when GOOGLE_SHEETS_ENABLED=true")
+		}
+		if cfg.GoogleSheetsCredentialsFile == "" && cfg.GoogleSheetsCredentialsJSON == "" {
+			return cfg, errors.New("GOOGLE_SHEETS_CREDENTIALS_FILE or GOOGLE_SHEETS_CREDENTIALS_JSON is required when GOOGLE_SHEETS_ENABLED=true")
+		}
+		if cfg.GoogleSheetsOrdersSheet == cfg.GoogleSheetsDepositsSheet {
+			return cfg, errors.New("GOOGLE_SHEETS_ORDERS_SHEET and GOOGLE_SHEETS_DEPOSITS_SHEET must be different")
+		}
 	}
 	if cfg.AppEnv == "prod" && !strings.HasPrefix(cfg.PublicBaseURL, "https://") {
 		return cfg, errors.New("PUBLIC_BASE_URL must start with https:// in prod")
@@ -111,6 +156,7 @@ func Load() (Config, error) {
 	if cfg.PostgresMinConns > cfg.PostgresMaxConns {
 		cfg.PostgresMinConns = cfg.PostgresMaxConns
 	}
+	cfg.PaymentPollEvery = minDuration(cfg.PaymentPollEvery, 15*time.Second)
 	cfg.OrderSyncEvery = minDuration(cfg.OrderSyncEvery, time.Minute)
 	cfg.BackupEvery = minDuration(cfg.BackupEvery, time.Hour)
 	return cfg, nil

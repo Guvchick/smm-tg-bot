@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"log/slog"
-	"net/url"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,6 +20,7 @@ import (
 	"smm-tg-bot/internal/config"
 	"smm-tg-bot/internal/httpapi"
 	"smm-tg-bot/internal/payments"
+	"smm-tg-bot/internal/sheetslog"
 	"smm-tg-bot/internal/smm"
 	"smm-tg-bot/internal/storage"
 	"smm-tg-bot/internal/telegram"
@@ -84,7 +85,12 @@ func main() {
 	store := storage.New(db, orm)
 	smmClient := smm.NewClient(cfg.SocRocketAPIURL, cfg.SocRocketAPIKey)
 	paymentHub := payments.NewHub(cfg)
-	service := app.NewService(cfg, store, rdb, smmClient, paymentHub, bot, logger)
+	sheetsClient, err := sheetslog.New(ctx, cfg, logger)
+	if err != nil {
+		logger.Error("google sheets", "error", err)
+		os.Exit(1)
+	}
+	service := app.NewService(cfg, store, rdb, smmClient, paymentHub, sheetsClient, bot, logger)
 	tg := telegram.New(service, bot, logger)
 
 	router := chi.NewRouter()
@@ -104,6 +110,9 @@ func main() {
 	}()
 	if cfg.OrderSyncEnabled {
 		go service.RunOrderSync(ctx)
+	}
+	if cfg.PaymentPollEnabled {
+		go service.RunPaymentPoll(ctx)
 	}
 	if cfg.BackupEnabled {
 		go service.RunBackups(ctx)
