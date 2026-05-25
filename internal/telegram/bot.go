@@ -279,17 +279,36 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	case strings.HasPrefix(data, "order:pick:"):
 		parts := strings.Split(data, ":")
 		if len(parts) == 4 {
-			catPage, _ := strconv.Atoi(parts[2])
-			catIndex, _ := strconv.Atoi(parts[3])
-			b.editCategoryServices(ctx, msg.Chat.ID, msg.MessageID, catPage, catIndex, 0)
+			platformPage, _ := strconv.Atoi(parts[2])
+			platformIndex, _ := strconv.Atoi(parts[3])
+			b.editPlatformSubcategories(ctx, msg.Chat.ID, msg.MessageID, platformPage, platformIndex, 0)
+		}
+	case strings.HasPrefix(data, "order:subpage:"):
+		parts := strings.Split(data, ":")
+		if len(parts) == 5 {
+			platformPage, _ := strconv.Atoi(parts[2])
+			platformIndex, _ := strconv.Atoi(parts[3])
+			subPage, _ := strconv.Atoi(parts[4])
+			b.editPlatformSubcategories(ctx, msg.Chat.ID, msg.MessageID, platformPage, platformIndex, subPage)
+		}
+	case strings.HasPrefix(data, "order:subpick:"):
+		parts := strings.Split(data, ":")
+		if len(parts) == 6 {
+			platformPage, _ := strconv.Atoi(parts[2])
+			platformIndex, _ := strconv.Atoi(parts[3])
+			subPage, _ := strconv.Atoi(parts[4])
+			subIndex, _ := strconv.Atoi(parts[5])
+			b.editPlatformSubcategoryServices(ctx, msg.Chat.ID, msg.MessageID, platformPage, platformIndex, subPage, subIndex, 0)
 		}
 	case strings.HasPrefix(data, "order:svcpage:"):
 		parts := strings.Split(data, ":")
-		if len(parts) == 5 {
-			catPage, _ := strconv.Atoi(parts[2])
-			catIndex, _ := strconv.Atoi(parts[3])
-			svcPage, _ := strconv.Atoi(parts[4])
-			b.editCategoryServices(ctx, msg.Chat.ID, msg.MessageID, catPage, catIndex, svcPage)
+		if len(parts) == 7 {
+			platformPage, _ := strconv.Atoi(parts[2])
+			platformIndex, _ := strconv.Atoi(parts[3])
+			subPage, _ := strconv.Atoi(parts[4])
+			subIndex, _ := strconv.Atoi(parts[5])
+			svcPage, _ := strconv.Atoi(parts[6])
+			b.editPlatformSubcategoryServices(ctx, msg.Chat.ID, msg.MessageID, platformPage, platformIndex, subPage, subIndex, svcPage)
 		}
 	case strings.HasPrefix(data, "order:svc:"):
 		serviceID, _ := strconv.ParseInt(strings.TrimPrefix(data, "order:svc:"), 10, 64)
@@ -817,15 +836,15 @@ func (b *Bot) orderCategoriesView(ctx context.Context, page int) (string, tgbota
 	if page < 0 {
 		page = 0
 	}
-	categories, err := b.service.Store.ListCategories(ctx, perPage, page*perPage)
+	platforms, err := b.service.Store.ListPlatforms(ctx, perPage, page*perPage)
 	if err != nil {
 		kb := backKeyboard()
-		return "Не удалось загрузить категории: " + esc(err.Error()), kb
+		return "Не удалось загрузить платформы: " + esc(err.Error()), kb
 	}
-	total, _ := b.service.Store.CountCategories(ctx)
+	total, _ := b.service.Store.CountPlatforms(ctx)
 	var rows [][]tgbotapi.InlineKeyboardButton
-	for i, category := range categories {
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("▫️ "+short(category, 48), fmt.Sprintf("order:pick:%d:%d", page, i))))
+	for i, platform := range platforms {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(platformIcon(platform)+" "+short(platform, 42), fmt.Sprintf("order:pick:%d:%d", page, i))))
 	}
 	var nav []tgbotapi.InlineKeyboardButton
 	if page > 0 {
@@ -838,35 +857,90 @@ func (b *Bot) orderCategoriesView(ctx context.Context, page int) (string, tgbota
 		rows = append(rows, nav)
 	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Меню", "menu:main")))
-	if len(categories) == 0 {
+	if len(platforms) == 0 {
 		return "🛒 Услуги пока не загружены. Админ может нажать «Синхронизировать услуги» в админ-панели.", tgbotapi.NewInlineKeyboardMarkup(rows...)
 	}
-	return fmt.Sprintf("🛒 Выберите категорию\nСтраница %d", page+1), tgbotapi.NewInlineKeyboardMarkup(rows...)
+	return fmt.Sprintf("🛒 Выберите платформу\nСтраница %d", page+1), tgbotapi.NewInlineKeyboardMarkup(rows...)
 }
 
-func (b *Bot) editCategoryServices(ctx context.Context, chatID int64, messageID int, catPage, catIndex, svcPage int) {
-	text, kb := b.categoryServicesView(ctx, catPage, catIndex, svcPage)
+func (b *Bot) editPlatformSubcategories(ctx context.Context, chatID int64, messageID int, platformPage, platformIndex, subPage int) {
+	text, kb := b.platformSubcategoriesView(ctx, platformPage, platformIndex, subPage)
 	b.edit(chatID, messageID, text, &kb)
 }
 
-func (b *Bot) categoryServicesView(ctx context.Context, catPage, catIndex, svcPage int) (string, tgbotapi.InlineKeyboardMarkup) {
-	const catPerPage = 8
-	const svcPerPage = 7
-	categories, err := b.service.Store.ListCategories(ctx, catPerPage, catPage*catPerPage)
-	if err != nil || catIndex < 0 || catIndex >= len(categories) {
+func (b *Bot) platformSubcategoriesView(ctx context.Context, platformPage, platformIndex, subPage int) (string, tgbotapi.InlineKeyboardMarkup) {
+	const platformPerPage = 8
+	const subPerPage = 8
+	platforms, err := b.service.Store.ListPlatforms(ctx, platformPerPage, platformPage*platformPerPage)
+	if err != nil || platformIndex < 0 || platformIndex >= len(platforms) {
 		kb := backKeyboard()
 		if err != nil {
-			return "Не удалось загрузить категорию: " + esc(err.Error()), kb
+			return "Не удалось загрузить платформу: " + esc(err.Error()), kb
 		}
-		return "Категория не найдена.", kb
+		return "Платформа не найдена.", kb
 	}
-	category := categories[catIndex]
-	services, err := b.service.Store.ListServicesByCategory(ctx, category, svcPerPage, svcPage*svcPerPage)
+	platform := platforms[platformIndex]
+	subcategories, err := b.service.Store.ListSubcategoriesByPlatform(ctx, platform, subPerPage, subPage*subPerPage)
+	if err != nil {
+		kb := backKeyboard()
+		return "Не удалось загрузить подкатегории: " + esc(err.Error()), kb
+	}
+	total, _ := b.service.Store.CountSubcategoriesByPlatform(ctx, platform)
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for i, subcategory := range subcategories {
+		label := "▫️ " + short(cleanSubcategoryLabel(platform, subcategory), 48)
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(label, fmt.Sprintf("order:subpick:%d:%d:%d:%d", platformPage, platformIndex, subPage, i))))
+	}
+	var nav []tgbotapi.InlineKeyboardButton
+	if subPage > 0 {
+		nav = append(nav, tgbotapi.NewInlineKeyboardButtonData("⬅️", fmt.Sprintf("order:subpage:%d:%d:%d", platformPage, platformIndex, subPage-1)))
+	}
+	if (subPage+1)*subPerPage < total {
+		nav = append(nav, tgbotapi.NewInlineKeyboardButtonData("➡️", fmt.Sprintf("order:subpage:%d:%d:%d", platformPage, platformIndex, subPage+1)))
+	}
+	if len(nav) > 0 {
+		rows = append(rows, nav)
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Платформы", fmt.Sprintf("order:cat:%d", platformPage))))
+	if len(subcategories) == 0 {
+		return fmt.Sprintf("%s <b>%s</b>\nПодкатегорий пока нет.", platformIcon(platform), esc(platform)), tgbotapi.NewInlineKeyboardMarkup(rows...)
+	}
+	return fmt.Sprintf("%s <b>%s</b>\nВыберите подкатегорию", platformIcon(platform), esc(platform)), tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+func (b *Bot) editPlatformSubcategoryServices(ctx context.Context, chatID int64, messageID int, platformPage, platformIndex, subPage, subIndex, svcPage int) {
+	text, kb := b.platformSubcategoryServicesView(ctx, platformPage, platformIndex, subPage, subIndex, svcPage)
+	b.edit(chatID, messageID, text, &kb)
+}
+
+func (b *Bot) platformSubcategoryServicesView(ctx context.Context, platformPage, platformIndex, subPage, subIndex, svcPage int) (string, tgbotapi.InlineKeyboardMarkup) {
+	const platformPerPage = 8
+	const subPerPage = 8
+	const svcPerPage = 7
+	platforms, err := b.service.Store.ListPlatforms(ctx, platformPerPage, platformPage*platformPerPage)
+	if err != nil || platformIndex < 0 || platformIndex >= len(platforms) {
+		kb := backKeyboard()
+		if err != nil {
+			return "Не удалось загрузить платформу: " + esc(err.Error()), kb
+		}
+		return "Платформа не найдена.", kb
+	}
+	platform := platforms[platformIndex]
+	subcategories, err := b.service.Store.ListSubcategoriesByPlatform(ctx, platform, subPerPage, subPage*subPerPage)
+	if err != nil || subIndex < 0 || subIndex >= len(subcategories) {
+		kb := backKeyboard()
+		if err != nil {
+			return "Не удалось загрузить подкатегорию: " + esc(err.Error()), kb
+		}
+		return "Подкатегория не найдена.", kb
+	}
+	subcategory := subcategories[subIndex]
+	services, err := b.service.Store.ListServicesByPlatformSubcategory(ctx, platform, subcategory, svcPerPage, svcPage*svcPerPage)
 	if err != nil {
 		kb := backKeyboard()
 		return "Не удалось загрузить услуги: " + esc(err.Error()), kb
 	}
-	total, _ := b.service.Store.CountServicesByCategory(ctx, category)
+	total, _ := b.service.Store.CountServicesByPlatformSubcategory(ctx, platform, subcategory)
 	var rows [][]tgbotapi.InlineKeyboardButton
 	for _, svc := range services {
 		price, _ := b.service.PriceCents(ctx, svc.ID, svc.Min)
@@ -875,16 +949,17 @@ func (b *Bot) categoryServicesView(ctx context.Context, catPage, catIndex, svcPa
 	}
 	var nav []tgbotapi.InlineKeyboardButton
 	if svcPage > 0 {
-		nav = append(nav, tgbotapi.NewInlineKeyboardButtonData("⬅️", fmt.Sprintf("order:svcpage:%d:%d:%d", catPage, catIndex, svcPage-1)))
+		nav = append(nav, tgbotapi.NewInlineKeyboardButtonData("⬅️", fmt.Sprintf("order:svcpage:%d:%d:%d:%d:%d", platformPage, platformIndex, subPage, subIndex, svcPage-1)))
 	}
 	if (svcPage+1)*svcPerPage < total {
-		nav = append(nav, tgbotapi.NewInlineKeyboardButtonData("➡️", fmt.Sprintf("order:svcpage:%d:%d:%d", catPage, catIndex, svcPage+1)))
+		nav = append(nav, tgbotapi.NewInlineKeyboardButtonData("➡️", fmt.Sprintf("order:svcpage:%d:%d:%d:%d:%d", platformPage, platformIndex, subPage, subIndex, svcPage+1)))
 	}
 	if len(nav) > 0 {
 		rows = append(rows, nav)
 	}
-	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Категории", fmt.Sprintf("order:cat:%d", catPage))))
-	return fmt.Sprintf("🛒 <b>%s</b>\nВыберите услугу", esc(category)), tgbotapi.NewInlineKeyboardMarkup(rows...)
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Подкатегории", fmt.Sprintf("order:subpage:%d:%d:%d", platformPage, platformIndex, subPage))))
+	title := cleanSubcategoryLabel(platform, subcategory)
+	return fmt.Sprintf("%s <b>%s</b>\n%s\nВыберите лот", platformIcon(platform), esc(platform), esc(title)), tgbotapi.NewInlineKeyboardMarkup(rows...)
 }
 
 func (b *Bot) selectService(ctx context.Context, chatID int64, messageID int, tgID int64, serviceID int64) {
@@ -914,7 +989,7 @@ func (b *Bot) showServiceActions(ctx context.Context, chatID int64, messageID in
 			tgbotapi.NewInlineKeyboardButtonData("🛒 Обычный заказ", fmt.Sprintf("order:single:%d", serviceID)),
 			tgbotapi.NewInlineKeyboardButtonData("📦 Массовый заказ", fmt.Sprintf("order:masssvc:%d", serviceID)),
 		),
-		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Категории", "menu:order")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("⬅️ Платформы", "menu:order")),
 	}
 	kb := tgbotapi.NewInlineKeyboardMarkup(rows...)
 	text := fmt.Sprintf(
@@ -1173,6 +1248,67 @@ func providerName(provider string) string {
 	default:
 		return esc(provider)
 	}
+}
+
+func platformIcon(platform string) string {
+	switch platform {
+	case "VK":
+		return "🔵"
+	case "YouTube":
+		return "▶️"
+	case "Telegram":
+		return "✈️"
+	case "Instagram":
+		return "📸"
+	case "TikTok":
+		return "🎵"
+	case "Facebook":
+		return "📘"
+	case "Twitter / X":
+		return "𝕏"
+	case "Twitch":
+		return "🟣"
+	case "Discord":
+		return "💬"
+	case "Spotify":
+		return "🟢"
+	case "SoundCloud":
+		return "☁️"
+	case "Threads":
+		return "🧵"
+	case "RuTube":
+		return "📺"
+	case "Дзен":
+		return "📰"
+	default:
+		return "▫️"
+	}
+}
+
+func cleanSubcategoryLabel(platform, subcategory string) string {
+	label := strings.TrimSpace(subcategory)
+	if label == "" {
+		return "Без подкатегории"
+	}
+	replacements := []string{
+		platform,
+		strings.ToLower(platform),
+		strings.ToUpper(platform),
+		"Instagram", "instagram", "Инстаграм", "инстаграм",
+		"YouTube", "Youtube", "youtube", "Ютуб", "ютуб",
+		"Telegram", "telegram", "Телеграм", "телеграм",
+		"TikTok", "Tiktok", "tiktok", "ТикТок", "тикток",
+		"VKontakte", "vkontakte", "ВКонтакте", "вконтакте",
+		"VK", "vk", "ВК", "вк",
+	}
+	for _, needle := range replacements {
+		label = strings.TrimSpace(strings.ReplaceAll(label, needle, ""))
+	}
+	label = strings.Trim(label, " /|-:·")
+	if label == "" {
+		return subcategory
+	}
+	return label
 }
 
 func humanOrderStatus(status string) string {

@@ -21,6 +21,43 @@ type Store struct {
 
 func New(db *pgxpool.Pool, orm *ORM) *Store { return &Store{db: db, orm: orm} }
 
+const servicePlatformExpr = `case
+	when lower(coalesce(social,'')) in ('vk','vkontakte') or lower(concat_ws(' ', social, category, name)) like '%вк%' or lower(concat_ws(' ', social, category, name)) like '%vk%' or lower(concat_ws(' ', social, category, name)) like '%vkontakte%' or lower(concat_ws(' ', social, category, name)) like '%vk.com%' then 'VK'
+	when lower(coalesce(social,'')) in ('youtube','yt') or lower(concat_ws(' ', social, category, name)) like '%youtube%' or lower(concat_ws(' ', social, category, name)) like '%youtu.be%' or lower(concat_ws(' ', social, category, name)) like '%ютуб%' then 'YouTube'
+	when lower(coalesce(social,'')) in ('telegram','tg') or lower(concat_ws(' ', social, category, name)) like '%telegram%' or lower(concat_ws(' ', social, category, name)) like '%телеграм%' then 'Telegram'
+	when lower(coalesce(social,'')) in ('instagram','inst','ig') or lower(concat_ws(' ', social, category, name)) like '%instagram%' or lower(concat_ws(' ', social, category, name)) like '%инст%' then 'Instagram'
+	when lower(coalesce(social,'')) in ('tiktok','tt') or lower(concat_ws(' ', social, category, name)) like '%tiktok%' or lower(concat_ws(' ', social, category, name)) like '%tik tok%' or lower(concat_ws(' ', social, category, name)) like '%тикток%' then 'TikTok'
+	when lower(coalesce(social,'')) in ('facebook','fb') or lower(concat_ws(' ', social, category, name)) like '%facebook%' or lower(concat_ws(' ', social, category, name)) like '%fb.com%' then 'Facebook'
+	when lower(coalesce(social,'')) in ('twitter','x') or lower(concat_ws(' ', social, category, name)) like '%twitter%' then 'Twitter / X'
+	when lower(coalesce(social,'')) in ('twitch') or lower(concat_ws(' ', social, category, name)) like '%twitch%' then 'Twitch'
+	when lower(coalesce(social,'')) in ('discord') or lower(concat_ws(' ', social, category, name)) like '%discord%' then 'Discord'
+	when lower(coalesce(social,'')) in ('spotify') or lower(concat_ws(' ', social, category, name)) like '%spotify%' then 'Spotify'
+	when lower(coalesce(social,'')) in ('soundcloud') or lower(concat_ws(' ', social, category, name)) like '%soundcloud%' then 'SoundCloud'
+	when lower(coalesce(social,'')) in ('threads') or lower(concat_ws(' ', social, category, name)) like '%threads%' then 'Threads'
+	when lower(coalesce(social,'')) in ('rutube') or lower(concat_ws(' ', social, category, name)) like '%rutube%' or lower(concat_ws(' ', social, category, name)) like '%рутуб%' then 'RuTube'
+	when lower(coalesce(social,'')) in ('dzen','zen') or lower(concat_ws(' ', social, category, name)) like '%dzen%' or lower(concat_ws(' ', social, category, name)) like '%дзен%' then 'Дзен'
+	else 'Другое'
+end`
+
+const serviceSubcategoryExpr = `coalesce(nullif(trim(category),''), nullif(trim(type),''), 'Без подкатегории')`
+const servicePlatformOrderExpr = `case platform
+	when 'VK' then 1
+	when 'YouTube' then 2
+	when 'Telegram' then 3
+	when 'Instagram' then 4
+	when 'TikTok' then 5
+	when 'Facebook' then 6
+	when 'Twitter / X' then 7
+	when 'Twitch' then 8
+	when 'Discord' then 9
+	when 'Spotify' then 10
+	when 'SoundCloud' then 11
+	when 'Threads' then 12
+	when 'RuTube' then 13
+	when 'Дзен' then 14
+	else 99
+end`
+
 func (s *Store) UpsertUser(ctx context.Context, tgID int64, username, firstName string, lang domain.Language, referredBy *int64) (domain.User, error) {
 	code := fmt.Sprintf("u%d", tgID)
 	row := s.db.QueryRow(ctx, `
@@ -141,6 +178,94 @@ func (s *Store) CountCategories(ctx context.Context) (int, error) {
 	return count, err
 }
 
+func (s *Store) ListPlatforms(ctx context.Context, limit, offset int) ([]string, error) {
+	rows, err := s.db.Query(ctx, fmt.Sprintf(`
+with normalized as (
+	select %s as platform
+	from services
+	where enabled=true
+)
+select platform
+from normalized
+group by platform
+order by %s, platform
+limit $1 offset $2`, servicePlatformExpr, servicePlatformOrderExpr), limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var platform string
+		if err := rows.Scan(&platform); err != nil {
+			return nil, err
+		}
+		out = append(out, platform)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CountPlatforms(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRow(ctx, fmt.Sprintf(`
+with normalized as (
+	select %s as platform
+	from services
+	where enabled=true
+)
+select count(*) from (
+	select platform
+	from normalized
+	group by platform
+) p`, servicePlatformExpr)).Scan(&count)
+	return count, err
+}
+
+func (s *Store) ListSubcategoriesByPlatform(ctx context.Context, platform string, limit, offset int) ([]string, error) {
+	rows, err := s.db.Query(ctx, fmt.Sprintf(`
+with normalized as (
+	select %s as platform, %s as subcategory
+	from services
+	where enabled=true
+)
+select subcategory
+from normalized
+where platform=$1
+group by subcategory
+order by subcategory
+limit $2 offset $3`, servicePlatformExpr, serviceSubcategoryExpr), platform, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var subcategory string
+		if err := rows.Scan(&subcategory); err != nil {
+			return nil, err
+		}
+		out = append(out, subcategory)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CountSubcategoriesByPlatform(ctx context.Context, platform string) (int, error) {
+	var count int
+	err := s.db.QueryRow(ctx, fmt.Sprintf(`
+with normalized as (
+	select %s as platform, %s as subcategory
+	from services
+	where enabled=true
+)
+select count(*) from (
+	select platform, subcategory
+	from normalized
+	group by platform, subcategory
+) s
+where platform=$1`, servicePlatformExpr, serviceSubcategoryExpr), platform).Scan(&count)
+	return count, err
+}
+
 func (s *Store) ListServicesByCategory(ctx context.Context, category string, limit, offset int) ([]domain.Service, error) {
 	rows, err := s.db.Query(ctx, `
 select id,name,category,rate,min_qty,max_qty,social,type,refill,cancel,coalesce(markup_percent,0),enabled
@@ -165,6 +290,44 @@ limit $2 offset $3`, category, limit, offset)
 		out = append(out, svc)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) ListServicesByPlatformSubcategory(ctx context.Context, platform, subcategory string, limit, offset int) ([]domain.Service, error) {
+	rows, err := s.db.Query(ctx, fmt.Sprintf(`
+select id,name,category,rate,min_qty,max_qty,social,type,refill,cancel,coalesce(markup_percent,0),enabled
+from (
+	select *, %s as platform, %s as subcategory, row_number() over(partition by %s, %s, lower(trim(name)), min_qty, max_qty, type order by rate asc, id asc) rn
+	from services
+	where enabled=true
+) s
+where rn=1 and platform=$1 and subcategory=$2
+order by type,name
+limit $3 offset $4`, servicePlatformExpr, serviceSubcategoryExpr, servicePlatformExpr, serviceSubcategoryExpr), platform, subcategory, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Service
+	for rows.Next() {
+		var svc domain.Service
+		if err := rows.Scan(&svc.ID, &svc.Name, &svc.Category, &svc.Rate, &svc.Min, &svc.Max, &svc.Social, &svc.Type, &svc.Refill, &svc.Cancel, &svc.Markup, &svc.Enabled); err != nil {
+			return nil, err
+		}
+		out = append(out, svc)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CountServicesByPlatformSubcategory(ctx context.Context, platform, subcategory string) (int, error) {
+	var count int
+	err := s.db.QueryRow(ctx, fmt.Sprintf(`
+select count(*) from (
+	select 1
+	from services
+	where enabled=true and %s=$1 and %s=$2
+	group by %s, %s, lower(trim(name)), min_qty, max_qty, type
+) s`, servicePlatformExpr, serviceSubcategoryExpr, servicePlatformExpr, serviceSubcategoryExpr), platform, subcategory).Scan(&count)
+	return count, err
 }
 
 func (s *Store) CountServicesByCategory(ctx context.Context, category string) (int, error) {
